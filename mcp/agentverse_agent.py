@@ -86,10 +86,14 @@ def _resolve_repo(path_or_url: str) -> tuple[str, str | None]:
         tmp_dir = tempfile.mkdtemp(prefix="kowalski_")
         repo_dir = os.path.join(tmp_dir, "repo")
         log.info("Cloning %s into %s", clone_url, repo_dir)
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", clone_url, repo_dir],
-            capture_output=True, text=True, timeout=120,
-        )
+        try:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", clone_url, repo_dir],
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
         if result.returncode != 0:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise RuntimeError(f"Failed to clone {clone_url}: {result.stderr.strip()}")
@@ -192,8 +196,8 @@ def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
         else:
             return f"Unknown tool: {tool_name}. Available: analyze_repo, module_health, suggest_refactor, check_change, get_metric_graph"
 
-    except RuntimeError as e:
-        return f"Failed to clone repository: {e}"
+    except Exception as e:
+        return f"Failed to process repository: {type(e).__name__}: {e}"
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
