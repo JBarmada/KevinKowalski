@@ -11,6 +11,7 @@ from contract import GraphSnapshot, ModuleMetrics
 from formatters import (
     format_analyze_repo,
     format_check_change,
+    format_generate_graph,
     format_metric_graph,
     format_module_health,
     format_refactor_assistance,
@@ -132,12 +133,24 @@ def test_check_change_handles_red_verdict():
     assert "CYCLE" in out
 
 
-def test_metric_graph_returns_valid_json():
-    out = format_metric_graph(_mini_snapshot())
-    parsed = json.loads(out)  # must not raise
-    assert "nodes" in parsed and "edges" in parsed
-    assert len(parsed["nodes"]) == 3
-    assert len(parsed["edges"]) == 3
+def test_generate_graph_renders_summary():
+    result = {
+        "output_path": "/tmp/graph.html",
+        "file_nodes": 10,
+        "file_edges": 15,
+        "package_nodes": 3,
+        "package_edges": 4,
+        "function_nodes": 20,
+        "function_edges": 25,
+        "file_cycle_count": 2,
+        "high_impact_count": 1,
+        "high_susceptibility_count": 3,
+    }
+    out = format_generate_graph(result)
+    assert isinstance(out, str) and out
+    assert "10" in out  # file nodes
+    assert "15" in out  # file edges
+    assert "/tmp/graph.html" in out
 
 
 def test_metric_graph_node_shape():
@@ -231,3 +244,20 @@ def test_refactor_assistance_formatter_smoke():
     out = format_refactor_assistance(payload)
     assert "pkg_b" in out and "pkg_a" in out
     assert "Package level" in out and "Function level" in out
+
+
+def test_generate_graph_no_issues():
+    result = {
+        "output_path": "/tmp/graph.html",
+        "file_nodes": 5,
+        "file_edges": 3,
+        "package_nodes": 2,
+        "package_edges": 1,
+        "function_nodes": 8,
+        "function_edges": 6,
+        "file_cycle_count": 0,
+        "high_impact_count": 0,
+        "high_susceptibility_count": 0,
+    }
+    out = format_generate_graph(result)
+    assert "no architectural concerns" in out.lower()
