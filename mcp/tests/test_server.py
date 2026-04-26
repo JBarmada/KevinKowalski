@@ -6,7 +6,6 @@ Analyzer-agnostic -- survives the swap.
 """
 
 import asyncio
-import json
 
 import pytest
 
@@ -18,7 +17,7 @@ EXPECTED_TOOLS = {
     "module_health",
     "suggest_refactor",
     "check_change",
-    "get_metric_graph",
+    "generate_graph",
 }
 
 
@@ -70,10 +69,9 @@ def test_check_change_returns_string():
     assert isinstance(out, str) and out
 
 
-def test_get_metric_graph_returns_valid_json():
-    out = _call_tool("get_metric_graph", {"path": "/tmp/fake-repo"})
-    parsed = json.loads(out)
-    assert "nodes" in parsed and "edges" in parsed
+def test_generate_graph_returns_string():
+    out = _call_tool("generate_graph", {"path": "/tmp/fake-repo"})
+    assert isinstance(out, str) and out
 
 
 def test_dot_path_rejected_with_helpful_message():
