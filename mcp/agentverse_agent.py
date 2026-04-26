@@ -521,6 +521,10 @@ def _summarize(
     return str(r.choices[0].message.content).strip()
 
 
+class ToolError(Exception):
+    """Raised by _run_tool_strict when a tool invocation fails."""
+
+
 # ---------------------------------------------------------------------------
 # Graph generation helper
 # ---------------------------------------------------------------------------
@@ -573,7 +577,7 @@ def _generate_graph_for_path(repo_path: str) -> str:
     )
 
     if proc.returncode != 0:
-        raise RuntimeError(
+        raise ToolError(
             f"Graph generation failed (exit {proc.returncode}): {proc.stderr.strip()}"
         )
 
@@ -584,10 +588,6 @@ def _generate_graph_for_path(repo_path: str) -> str:
 # ---------------------------------------------------------------------------
 # Tool dispatcher
 # ---------------------------------------------------------------------------
-
-
-class ToolError(Exception):
-    """Raised by _run_tool_strict when a tool invocation fails."""
 
 
 def _run_tool_strict(tool_name: str, path_or_url: str, arg: str) -> str:
