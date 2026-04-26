@@ -1,52 +1,123 @@
-# MCP Codebase Explorer
+# Kowalski-Kevin MCP Server
 
-A minimal Model Context Protocol (MCP) server that provides a single tool (`list_codebase_files`) to scan your local codebase and automatically generate a sleek, static HTML file explorer for easy navigation.
+An MCP server that exposes architectural metrics (coupling, cohesion, complexity) to AI coding agents so they can advise on refactors *before* writing spaghetti.
 
-## 🛠️ Setup
+Currently backed by a **fake analyzer** that returns a fixed snapshot of an imaginary 6-module web app — enough for the MCP plumbing to be exercised end-to-end while the real analyzer is under construction. Swap is one line in `mcp_server.py`.
 
-To get this MCP server running locally, you need to set up a Python virtual environment and install the required dependencies.
+## Tools
 
-1. Open your terminal and navigate to this `mcp` folder.
-2. Create and activate a Python virtual environment:
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\Activate.ps1
-   ```
-3. Install the dependencies:
-   ```powershell
-   pip install -r requirements.txt
-   ```
+| Tool | Args | Returns |
+|---|---|---|
+| `analyze_repo` | `path: str = "."` | Markdown summary of the repo: counts, average instability, top offenders |
+| `module_health` | `path, module` | Per-module card: Ca/Ce/I/LCOM/CC, violations, importers/importees |
+| `suggest_refactor` | `path, feature_description` | Ranked decouplings to do **before** implementing the feature |
+| `check_change` | `path, files: list[str]` | Before/after metric delta + green/yellow/red verdict |
+| `get_metric_graph` | `path: str = "."` | JSON `{nodes, edges}` for the visualization |
 
-## 🔌 Linking to Claude Desktop
+All paths are normalized: `.` or empty → server CWD, otherwise absolutized.
 
-To allow Claude to use this server, you must add it to your Claude Desktop configuration file.
+## Setup
 
-1. Open the Claude Desktop config file. You can find it at:
-   `%APPDATA%\Claude\claude_desktop_config.json`
-   *(Press Windows Key + R, paste the path above, and hit Enter if you can't find it).*
+```bash
+cd KevinKowalski
+uv sync
+```
 
-2. Add this server to your `mcpServers` list. **Important:** You must use the absolute paths on your system pointing directly to the `python.exe` inside your newly created `venv` folder, and the absolute path to `mcp_server.py`. 
+Or with plain pip:
 
-Here is an example configuration based on the default cloning path:
+```bash
+pip install fastmcp
+```
+
+## Wire into Claude Code
+
+Edit `~/.claude.json` (Claude Code) or `%APPDATA%\Claude\claude_desktop_config.json` (Claude Desktop):
 
 ```json
 {
   "mcpServers": {
-    "CodebaseExplorer": {
-      "command": "c:/Users/maxbr/Programming/LAHacks2026/KevinKowalski/mcp/venv/Scripts/python.exe",
-      "args": [
-        "c:/Users/maxbr/Programming/LAHacks2026/KevinKowalski/mcp/mcp_server.py"
-      ]
+    "kowalski-kevin": {
+      "command": "C:/absolute/path/to/python.exe",
+      "args": ["C:/absolute/path/to/KevinKowalski/mcp/mcp_server.py"]
     }
   }
 }
 ```
 
-3. **Restart Claude Desktop** (completely quit it from your Windows system tray and reopen it). You should see a small plug icon in your chat input area indicating the server is connected.
+Restart the host (fully quit Claude Desktop from the system tray; for Claude Code, `/mcp` should re-list). Ask the agent: *"List your MCP tools"* — you should see all 5 prefixed `kowalski-kevin__*`.
 
-## 🚀 Usage
+## Try it
 
-Simply ask Claude to:
-> *"List the files in my codebase using the codebase explorer."*
+```
+Call analyze_repo with path "."
+```
 
-Claude will run the tool, output the raw files for context, and provide a `file:///.../explorer.html` link. Click that link to open the beautifully styled file tree in your web browser!
+Then:
+
+```
+Use suggest_refactor to figure out what to clean up before adding audit logging.
+```
+
+## Tests
+
+```bash
+# all tests
+pytest
+
+# only the swap-safe slice (skips fake-analyzer-pinned tests)
+pytest -m "not fake_only"
+```
+
+Test layout:
+
+- **`test_contract.py`** — asserts SHAPE of analyzer output. Survives the swap.
+- **`test_formatters.py`** — asserts SHAPE of formatter Markdown. Survives the swap.
+- **`test_server.py`** — drives the 5 tools through FastMCP machinery. Survives the swap.
+- **`test_fake_analyzer_only.py`** — pins specific behavior of the fake analyzer. **Will fail after the analyzer swap. Delete the file at that point — do not "fix" the assertions.** A loud banner prints whenever these are collected.
+
+## Architecture
+
+```
+mcp_server.py        -- FastMCP wiring, 5 @mcp.tool() functions
+  |
+  +-- formatters.py  -- pure functions: GraphSnapshot -> Markdown
+  |
+  +-- get_analyzer() -- swap point
+        |
+        +-- fake_analyzer.py  (today)
+        +-- real analyzer     (later, satisfies Analyzer protocol)
+              |
+              +-- contract.py  -- ModuleMetrics, GraphSnapshot, Analyzer
+```
+
+The MCP server depends only on `contract.py` for types and `get_analyzer()` for the implementation. To swap analyzers, change the import in `mcp_server.py` and the return value of `get_analyzer()` in the chosen module.
+
+## Important constraints
+
+- **Stdout is the JSON-RPC channel.** Never `print()` from this module or anything it imports at runtime — it corrupts the protocol. All logs go to stderr (configured in `mcp_server.py`).
+- **Tools must return strings, not raise.** Every tool is wrapped with `@_safe_tool` which traps exceptions and returns a readable error string. A raised exception surfaces as an opaque protocol error on the agent side.
+- **ASCII output.** Formatters avoid emojis and Unicode arrows so output renders on any console (Windows cp1252 included). Agents read the JSON-encoded UTF-8 fine either way, but local debugging stays painless.
+
+## For the analyzer team
+
+Implement the `Analyzer` protocol from `mcp/contract.py`:
+
+```python
+class Analyzer(Protocol):
+    def analyze(self, repo_path: str) -> GraphSnapshot: ...
+    def incremental_check(self, repo_path: str, files: list[str]) -> dict: ...
+```
+
+Then change two things in `mcp/mcp_server.py`:
+
+```python
+from your_module import get_analyzer  # was: fake_analyzer
+```
+
+…and delete `mcp/fake_analyzer.py` plus `mcp/tests/test_fake_analyzer_only.py`. The remaining 27 tests should still pass.
+
+## Out of scope (for now)
+
+- `app.py` and `index.html` — a separate FastAPI browser viewer, not on the MCP path.
+- Real graph analysis (analyzer team).
+- Visualization frontend (Phase 6).
