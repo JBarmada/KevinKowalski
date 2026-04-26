@@ -123,9 +123,14 @@ def _resolve_repo(path_or_url: str) -> tuple[str, str | None]:
     return os.path.abspath(path_or_url), None
 
 
-TOOL_DESCRIPTIONS = """You are a router for KevinKowalski, an architectural
-analysis assistant. Your only job: classify the user message into ONE of
-three response types. Output exactly ONE line, nothing else.
+TOOL_DESCRIPTIONS = """You are a CLASSIFIER, not a chat assistant.
+
+Your output is parsed by code, not shown to a user. Output exactly ONE
+short line starting with one of three tags: CHAT:, TOOL:, or HELP:. Do
+not write a sentence. Do not apologize. Do not explain. Do not greet the
+user. Just emit the tag.
+
+If your first three characters aren't C, T, or H, you have failed.
 
 ============================================================
 RESPONSE TYPE 1 -- CHAT (use this MOST often for short messages)
@@ -193,7 +198,13 @@ When in doubt, choose CHAT: -- it's safer than firing a tool with empty args.
 
 
 def _parse_tool_call(llm_response: str) -> dict:
-    """Parse the LLM's structured tool-call response into a dict."""
+    """Parse the LLM's structured tool-call response into a dict.
+
+    Fail-safe: if the response doesn't start with a recognized tag, treat
+    as CHAT. Previously this defaulted to analyze_repo with empty path,
+    which fires a useless tool call when the router goes rogue and
+    produces conversational prose instead of a tag.
+    """
     line = llm_response.strip().splitlines()[0].strip()
 
     if line.startswith("CHAT:"):
@@ -202,15 +213,29 @@ def _parse_tool_call(llm_response: str) -> dict:
     if line.startswith("HELP:"):
         return {"tool": "help", "message": line[5:].strip()}
 
+    if not line.startswith("TOOL:"):
+        # Router didn't follow the format -- safest fallback is CHAT
+        log.warning("Router output didn't start with a tag; falling back to CHAT")
+        return {"tool": "chat"}
+
     parts = {}
     for segment in line.split("|"):
         if ":" in segment:
             key, val = segment.split(":", 1)
             parts[key.strip()] = val.strip()
 
+    tool = parts.get("TOOL", "")
+    path = parts.get("PATH", "")
+    # If TOOL was claimed but PATH is empty, the router is hallucinating --
+    # don't fire an empty tool call, route to CHAT so the user gets a
+    # real conversational reply instead of an "I need a path" loop.
+    if not path:
+        log.warning("Router emitted TOOL: with empty PATH; falling back to CHAT")
+        return {"tool": "chat"}
+
     return {
-        "tool": parts.get("TOOL", "analyze_repo"),
-        "path": parts.get("PATH", ""),
+        "tool": tool or "chat",
+        "path": path,
         "arg": parts.get("ARG", ""),
     }
 
@@ -218,19 +243,28 @@ def _parse_tool_call(llm_response: str) -> dict:
 def _route(user_text: str, history: list[dict]) -> dict:
     """First pass: cheap router model picks which tool to call.
 
-    Sees prior conversation history so follow-ups like 'now check db.session'
-    can resolve the implicit repo path from earlier turns.
+    Deliberately does NOT see prior conversation history. The router is a
+    stateless classifier; passing history caused it to roleplay as the
+    assistant and emit conversational replies instead of tags. If we ever
+    need history-aware routing (e.g. 'now check db.session' resolving the
+    implicit repo from earlier), do it explicitly with a separate context
+    field, not by feeding it the full chat log.
+
+    history is accepted (and ignored) so the call signature stays stable
+    for handle_message; it's still used by _summarize.
     """
-    messages = [{"role": "system", "content": TOOL_DESCRIPTIONS}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": user_text})
+    del history  # intentionally unused; see docstring
+    messages = [
+        {"role": "system", "content": TOOL_DESCRIPTIONS},
+        {"role": "user", "content": user_text},
+    ]
     r = client.chat.completions.create(
         model=_ROUTER_MODEL,
         messages=messages,
-        max_tokens=128,
+        max_tokens=64,  # one tag line is well under this; tighter cap discourages prose
     )
     raw = str(r.choices[0].message.content)
-    log.info("Router raw response: %r", raw[:200])  # so we can debug bad routes
+    log.info("Router raw response: %r", raw[:200])
     return _parse_tool_call(raw)
 
 
