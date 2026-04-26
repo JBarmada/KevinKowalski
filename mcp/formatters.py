@@ -113,11 +113,11 @@ def format_suggest_refactor(snap: GraphSnapshot, feature_description: str) -> st
 
     lines.append("Address these **before** writing the feature — each one would amplify spaghetti otherwise:\n")
     for i, m in enumerate(candidates, 1):
-        rationale = "; ".join(_violation_explainer(v) for v in m.violations)
         lines.append(
-            f"{i}. **`{m.module}`** (Ca={m.ca}, Ce={m.ce}, I={m.instability:.2f}, CC={m.cc_max})\n"
-            f"   - {rationale}"
+            f"{i}. **`{m.module}`** (Ca={m.ca}, Ce={m.ce}, I={m.instability:.2f}, CC={m.cc_max})"
         )
+        for v in m.violations:
+            lines.append(f"   - {_violation_explainer(v)}")
     return "\n".join(lines)
 
 

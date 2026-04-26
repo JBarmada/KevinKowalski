@@ -86,6 +86,19 @@ def test_suggest_refactor_ranks_violators_first():
     assert len(out) <= TOKEN_BUDGET_CHARS
 
 
+def test_suggest_refactor_rationales_are_bulleted_not_joined():
+    """Each violation should be its own bullet, not semicolon-joined.
+
+    Regression: '; '.join produced ugly 'foo.; Bar...' rendering.
+    """
+    out = format_suggest_refactor(_mini_snapshot(), "x")
+    # "b" has two violations; should produce at least two distinct "   - " bullets
+    bullet_count = out.count("   - ")
+    assert bullet_count >= 2, f"expected per-violation bullets; got:\n{out}"
+    # And the old joined-with-semicolon style must be gone
+    assert ";" not in out or ".; " not in out
+
+
 def test_suggest_refactor_clean_repo_says_proceed():
     snap = GraphSnapshot(
         root="/x",
