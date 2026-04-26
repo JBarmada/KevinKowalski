@@ -8,3 +8,14 @@ dependencies = [
     "networkx>=3.6.1",
     "pyqt6>=6.11.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["mcp/tests"]
+markers = [
+    "fake_only: tests that pin behavior of the fake analyzer; will fail after the real analyzer swap (delete, don't fix)",
+]
