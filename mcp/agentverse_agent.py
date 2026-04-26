@@ -1,19 +1,37 @@
 """KevinKowalski Agentverse agent.
 
-Wraps the KevinKowalski architectural analysis tools as a uAgent registered
-on Agentverse with the Chat Protocol, making them accessible via ASI:One.
+uAgent bridge that exposes the architectural-analysis tools to ASI:One Chat.
 
-Users send natural-language queries through ASI:One Chat; this agent parses
-the intent, runs the appropriate analysis tool, and returns the Markdown
-result. Accepts GitHub repo URLs — repos are cloned automatically.
+Architecture:
+  ChatMessage --> _route()      [router LLM picks tool / chat / help]
+              \\-> _run_tool()    [analyzer.analyze + formatters.format_*]
+              \\-> _summarize()   [summarizer LLM writes natural-language reply]
+              --> ChatMessage    [summary + horizontal rule + raw markdown]
 
-Requires:
-    - ASI_ONE_API_KEY env var (get one at https://asi1.ai/dashboard/api-keys)
-    - An Agentverse account (https://agentverse.ai)
-    - uagents library (`uv add uagents`)
-    - git (for cloning repos from GitHub URLs)
+Conversation history is persisted per-sender via ctx.storage and capped at
+_HISTORY_LIMIT turns so prompts stay bounded.
+
+Required env vars:
+  ASI_ONE_API_KEY      -- https://asi1.ai/dashboard/api-keys (sk_*)
+  AGENTVERSE_API_KEY   -- https://agentverse.ai (JWT, av scope)
+
+Optional env vars:
+  AGENT_SEED           -- string used to derive the agent's address (default:
+                          "kevin-kowalski-arch-agent-seed-phrase-2026")
+  AGENT_NAME           -- registered name on Agentverse (default "KevinKowalski")
+  AGENT_NETWORK        -- "testnet" (default, auto-funded) or "mainnet"
+  AGENT_PORT           -- local HTTP port (default 8001)
+  AGENT_ENDPOINT       -- public endpoint URL when not using mailbox
+  AGENT_MAILBOX        -- "true" (default) | "false"
+  AGENT_PATCH_MAILBOX_BEARER -- "true" to apply the bearer-token mailbox patch
+                          for uagents < 0.24. Default off; uagents >= 0.24
+                          already sends the right header.
+
+External binaries:
+  git -- shelled out for GitHub clones.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -21,11 +39,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 from datetime import datetime
 from uuid import uuid4
 
+import aiohttp
+from dotenv import load_dotenv
 from openai import OpenAI
+from pydantic import UUID4
 from uagents import Agent, Context, Protocol
+from uagents.mailbox import StoredEnvelope
 from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement,
     ChatMessage,
@@ -43,6 +66,8 @@ from formatters import (
     format_suggest_refactor,
 )
 
+load_dotenv()  # so a local .env file works without pre-exporting
+
 logging.basicConfig(
     stream=sys.stderr,
     level=logging.INFO,
@@ -50,20 +75,55 @@ logging.basicConfig(
 )
 log = logging.getLogger("kowalski-agent")
 
+
+# ---------------------------------------------------------------------------
+# Configuration helpers
+# ---------------------------------------------------------------------------
+
+def _require_env(name: str) -> str:
+    """Read an env var, raise with a clear message if it's missing or empty."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"Missing required environment variable: {name}. "
+            "See the module docstring for the full list."
+        )
+    return value
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    """Parse a boolean env var. Truthy: 1/true/yes/on (case-insensitive)."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# ---------------------------------------------------------------------------
+# ASI:One client
+# ---------------------------------------------------------------------------
+
 ASI_API_KEY = os.environ.get("ASI_ONE_API_KEY", "")
 if not ASI_API_KEY:
-    log.warning("ASI_ONE_API_KEY not set — LLM routing will fail")
+    log.warning("ASI_ONE_API_KEY not set -- LLM routing will fail at first message")
 
 client = OpenAI(
     base_url="https://api.asi1.ai/v1",
     api_key=ASI_API_KEY,
 )
 
+# Module-level analyzer instance. Reused across all messages -- the contract
+# allows internal caching, so creating one is cheap relative to per-call.
 analyzer = get_analyzer()
 
-# Conversation memory: persisted via ctx.storage (KeyValueStore on disk).
-# Verified API: get/has/set/remove/clear; values are JSON-serialized.
-# We cap total stored turns per sender to bound prompt size and cost.
+
+# ---------------------------------------------------------------------------
+# Conversation memory
+# Persisted via ctx.storage (uagents KeyValueStore on disk). Verified API:
+# get/has/set/remove/clear; values are JSON-serialized. Capped per sender to
+# bound prompt size and cost.
+# ---------------------------------------------------------------------------
+
 _HISTORY_LIMIT = 10  # combined user + assistant turns
 _ROUTER_MODEL = "asi1"
 _SUMMARIZER_MODEL = "asi1-ultra"
@@ -81,14 +141,122 @@ def _load_history(ctx: "Context", sender: str) -> list[dict]:
 def _save_history(ctx: "Context", sender: str, history: list[dict]) -> None:
     ctx.storage.set(_history_key(sender), history[-_HISTORY_LIMIT:])
 
-agent = Agent(
-    name="KevinKowalski",
-    seed=os.environ.get("AGENT_SEED", "kevin-kowalski-arch-agent-seed-phrase-2026"),
-    port=8001,
-    mailbox=True,
-    publish_agent_details=True,
-    network="testnet",  # use testnet Almanac contract; auto-funded, no FET needed
-)
+
+# ---------------------------------------------------------------------------
+# Agent construction
+# ---------------------------------------------------------------------------
+
+def _build_agent() -> Agent:
+    """Build the uAgent from environment variables.
+
+    Defaults are tuned for the LA Hacks demo: testnet, mailbox-driven,
+    port 8001, with a stable seed so the address survives restarts.
+    """
+    seed = os.getenv("AGENT_SEED", "kevin-kowalski-arch-agent-seed-phrase-2026")
+    name = os.getenv("AGENT_NAME", "KevinKowalski")
+    network = os.getenv("AGENT_NETWORK", "testnet")
+    port = int(os.getenv("AGENT_PORT", "8001"))
+    endpoint = os.getenv("AGENT_ENDPOINT", "").strip()
+    use_mailbox = _bool_env("AGENT_MAILBOX", True)
+
+    kwargs: dict = {
+        "name": name,
+        "seed": seed,
+        "port": port,
+        "network": network,             # testnet Almanac is auto-funded
+        "publish_agent_details": True,  # surface name + tags on Agentverse
+    }
+    if use_mailbox:
+        kwargs["mailbox"] = True
+    if endpoint:
+        kwargs["endpoint"] = [endpoint]
+    return Agent(**kwargs)
+
+
+agent = _build_agent()
+
+
+def _patch_mailbox_bearer(api_key: str) -> None:
+    """Replace attestation-based auth with Bearer token in the mailbox client.
+
+    Agentverse v2 mailbox API requires `Authorization: Bearer <api_key>`, but
+    uagents <0.24 still sends the legacy `Agent <attestation>` header which
+    returns 401. Newer uagents (we're on 0.24.2) already do the right thing,
+    so this patch is opt-in via AGENT_PATCH_MAILBOX_BEARER=true.
+
+    Borrowed from fetchai/innovation-lab-examples real-estate-search-agent.
+    """
+    client = agent.mailbox_client
+    if client is None:
+        return
+
+    async def _check_mailbox_loop(self):
+        while True:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = f"{self._agentverse.agents_api}/{self._identity.address}/mailbox"
+                    async with session.get(
+                        url, headers={"Authorization": f"Bearer {api_key}"},
+                    ) as resp:
+                        if resp.status == 200:
+                            for item in await resp.json():
+                                await self._handle_envelope(StoredEnvelope.model_validate(item))
+                        elif resp.status == 404:
+                            if not self._missing_mailbox_warning_logged:
+                                self._logger.warning(
+                                    "Agent mailbox not found on Agentverse -- "
+                                    "register it first (Agent inspector URL)."
+                                )
+                                self._missing_mailbox_warning_logged = True
+                        else:
+                            self._logger.error(
+                                f"Mailbox poll failed: {resp.status}: {await resp.text()}"
+                            )
+            except aiohttp.ClientConnectorError as ex:
+                self._logger.warning(f"Mailbox connect failed: {ex}")
+            except Exception as ex:
+                self._logger.exception(f"Mailbox poll exception: {ex}")
+            await asyncio.sleep(self._poll_interval)
+
+    async def _delete_envelope(self, uuid: UUID4):
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self._agentverse.agents_api}/{self._identity.address}/mailbox/{uuid}"
+                async with session.delete(
+                    url, headers={"Authorization": f"Bearer {api_key}"},
+                ) as resp:
+                    if resp.status >= 300:
+                        self._logger.warning(f"Envelope delete failed: {await resp.text()}")
+        except aiohttp.ClientConnectorError as ex:
+            self._logger.warning(f"Mailbox connect failed: {ex}")
+        except Exception as ex:
+            self._logger.exception(f"Envelope delete exception: {ex}")
+
+    client._check_mailbox_loop = types.MethodType(_check_mailbox_loop, client)
+    client._delete_envelope = types.MethodType(_delete_envelope, client)
+
+
+if _bool_env("AGENT_PATCH_MAILBOX_BEARER", False):
+    _api_key = os.getenv("AGENTVERSE_API_KEY", "").strip()
+    if _api_key:
+        _patch_mailbox_bearer(_api_key)
+    else:
+        log.warning("AGENT_PATCH_MAILBOX_BEARER set but AGENTVERSE_API_KEY missing -- skipping patch")
+
+
+@agent.on_event("startup")
+async def _on_startup(ctx: Context):
+    """Log the bits you'll need to debug or share -- address, network, port."""
+    ctx.logger.info(f"Agent name:    {agent.name}")
+    ctx.logger.info(f"Agent address: {agent.address}")
+    ctx.logger.info(f"Network:       {os.getenv('AGENT_NETWORK', 'testnet')}")
+    ctx.logger.info(f"Mailbox:       {_bool_env('AGENT_MAILBOX', True)}")
+    if not ASI_API_KEY:
+        ctx.logger.warning("ASI_ONE_API_KEY missing -- routing/summarizing will 401")
+
+# ---------------------------------------------------------------------------
+# Chat protocol + repo resolution
+# ---------------------------------------------------------------------------
 
 protocol = Protocol(spec=chat_protocol_spec)
 
@@ -125,6 +293,10 @@ def _resolve_repo(path_or_url: str) -> tuple[str, str | None]:
         return repo_dir, tmp_dir
     return os.path.abspath(path_or_url), None
 
+
+# ---------------------------------------------------------------------------
+# Two-pass LLM: cheap router classifier, then a bigger summarizer model
+# ---------------------------------------------------------------------------
 
 TOOL_DESCRIPTIONS = """You are a CLASSIFIER, not a chat assistant.
 
@@ -344,6 +516,10 @@ def _summarize(
     return str(r.choices[0].message.content).strip()
 
 
+# ---------------------------------------------------------------------------
+# Tool dispatcher
+# ---------------------------------------------------------------------------
+
 def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
     """Execute a KevinKowalski tool and return the Markdown result."""
     if not path_or_url or path_or_url in (".", "./"):
@@ -393,6 +569,10 @@ def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+
+# ---------------------------------------------------------------------------
+# Chat protocol handlers
+# ---------------------------------------------------------------------------
 
 @protocol.on_message(ChatMessage)
 async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
@@ -466,8 +646,8 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
 
 
 @protocol.on_message(ChatAcknowledgement)
-async def handle_ack(ctx: Context, sender: str, msg: ChatAcknowledgement):
-    pass
+async def handle_ack(_ctx: Context, _sender: str, _msg: ChatAcknowledgement):
+    pass  # acks from ASI:One are informational only -- nothing to do
 
 
 agent.include(protocol, publish_manifest=True)
