@@ -49,7 +49,7 @@ import networkx as nx
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import UUID4
-from uagents import Agent, Context, Protocol
+from uagents import Agent, Context, Model, Protocol
 from uagents.mailbox import StoredEnvelope
 from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement,
@@ -786,7 +786,120 @@ async def handle_ack(_ctx: Context, _sender: str, _msg: ChatAcknowledgement):
     pass  # acks from ASI:One are informational only -- nothing to do
 
 
+# ---------------------------------------------------------------------------
+# KevinKowalski-Analysis protocol (v0.1.0)
+# Typed request/response pairs — one per MCP tool — so the agent is
+# discoverable by capability on Agentverse and callable programmatically.
+# ---------------------------------------------------------------------------
+
+
+class AnalyzeRepoRequest(Model):
+    path: str
+
+
+class AnalyzeRepoResponse(Model):
+    markdown: str
+
+
+class ModuleHealthRequest(Model):
+    path: str
+    module: str
+
+
+class ModuleHealthResponse(Model):
+    markdown: str
+
+
+class SuggestRefactorRequest(Model):
+    path: str
+    feature_description: str
+
+
+class SuggestRefactorResponse(Model):
+    markdown: str
+
+
+class CheckChangeRequest(Model):
+    path: str
+    files: list[str]
+
+
+class CheckChangeResponse(Model):
+    markdown: str
+
+
+class GetMetricGraphRequest(Model):
+    path: str
+
+
+class GetMetricGraphResponse(Model):
+    json_graph: str
+
+
+class AnalysisErrorMessage(Model):
+    error: str
+
+
+analysis_protocol = Protocol(name="KevinKowalski-Analysis", version="0.1.0")
+
+
+@analysis_protocol.on_message(AnalyzeRepoRequest)
+async def handle_analyze_repo(ctx: Context, sender: str, msg: AnalyzeRepoRequest):
+    ctx.logger.info("AnalyzeRepoRequest from %s path=%s", sender, msg.path)
+    try:
+        result = _run_tool("analyze_repo", msg.path, "")
+        await ctx.send(sender, AnalyzeRepoResponse(markdown=result))
+    except Exception as e:
+        ctx.logger.exception("analyze_repo failed")
+        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+
+
+@analysis_protocol.on_message(ModuleHealthRequest)
+async def handle_module_health(ctx: Context, sender: str, msg: ModuleHealthRequest):
+    ctx.logger.info("ModuleHealthRequest from %s path=%s module=%s", sender, msg.path, msg.module)
+    try:
+        result = _run_tool("module_health", msg.path, msg.module)
+        await ctx.send(sender, ModuleHealthResponse(markdown=result))
+    except Exception as e:
+        ctx.logger.exception("module_health failed")
+        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+
+
+@analysis_protocol.on_message(SuggestRefactorRequest)
+async def handle_suggest_refactor(ctx: Context, sender: str, msg: SuggestRefactorRequest):
+    ctx.logger.info("SuggestRefactorRequest from %s path=%s", sender, msg.path)
+    try:
+        result = _run_tool("suggest_refactor", msg.path, msg.feature_description)
+        await ctx.send(sender, SuggestRefactorResponse(markdown=result))
+    except Exception as e:
+        ctx.logger.exception("suggest_refactor failed")
+        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+
+
+@analysis_protocol.on_message(CheckChangeRequest)
+async def handle_check_change(ctx: Context, sender: str, msg: CheckChangeRequest):
+    ctx.logger.info("CheckChangeRequest from %s path=%s files=%s", sender, msg.path, msg.files)
+    try:
+        result = _run_tool("check_change", msg.path, ",".join(msg.files))
+        await ctx.send(sender, CheckChangeResponse(markdown=result))
+    except Exception as e:
+        ctx.logger.exception("check_change failed")
+        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+
+
+@analysis_protocol.on_message(GetMetricGraphRequest)
+async def handle_get_metric_graph(ctx: Context, sender: str, msg: GetMetricGraphRequest):
+    ctx.logger.info("GetMetricGraphRequest from %s path=%s", sender, msg.path)
+    try:
+        result = _run_tool("get_metric_graph", msg.path, "")
+        await ctx.send(sender, GetMetricGraphResponse(json_graph=result))
+    except Exception as e:
+        ctx.logger.exception("get_metric_graph failed")
+        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+
+
 agent.include(protocol, publish_manifest=True)
+agent.include(analysis_protocol, publish_manifest=True)
 
 if __name__ == "__main__":
     log.info("KevinKowalski Agentverse agent starting")
