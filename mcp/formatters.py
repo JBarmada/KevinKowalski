@@ -8,6 +8,8 @@ don't blow the agent's context. Truncate lists rather than verbose prose.
 """
 
 import json
+import re
+from pathlib import Path
 
 from contract import GraphSnapshot, ModuleMetrics
 
@@ -231,6 +233,17 @@ def format_refactor_assistance(payload: dict) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+def viz_html_path_from_generate_stdout(stdout: str, cwd: Path) -> Path:
+    """Resolve the HTML path from ``visualization.generate_graph`` stdout (``Generated:`` line)."""
+    m = re.search(r"^Generated:\s*(.+)$", stdout, re.MULTILINE)
+    if not m:
+        raise ValueError("visualization.generate_graph did not print a Generated: line")
+    p = Path(m.group(1).strip())
+    if p.is_absolute():
+        return p.resolve()
+    return (cwd / p).resolve()
 
 
 def format_generate_graph(result: dict) -> str:

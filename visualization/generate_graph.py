@@ -12,6 +12,7 @@ from visualization.utils import (
     build_function_graph,
     compute_metrics,
     find_cycle_info,
+    output_stem_for_source_root,
     parse_edges,
 )
 
@@ -35,8 +36,12 @@ Examples:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("visualization/output/graph.html"),
-        help="Output HTML file path (default: visualization/output/graph.html).",
+        default=None,
+        help=(
+            "Output HTML file path. Default: visualization/output/<stem>.html "
+            "where <stem> is derived from --path (path separators and illegal "
+            "filename characters replaced)."
+        ),
     )
     parser.add_argument(
         "--no-browser",
@@ -54,6 +59,11 @@ Examples:
         sys.exit(1)
 
     source_root = args.path.resolve()
+    if args.output is None:
+        args.output = (
+            Path("visualization/output")
+            / f"{output_stem_for_source_root(source_root)}.html"
+        )
 
     # --- File-level graph ---
     print(f"Parsing {source_root}...")

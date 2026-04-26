@@ -6,6 +6,7 @@ because they don't touch the analyzer at all.
 """
 
 import json
+from pathlib import Path
 
 from contract import GraphSnapshot, ModuleMetrics
 from formatters import (
@@ -16,6 +17,7 @@ from formatters import (
     format_module_health,
     format_refactor_assistance,
     format_suggest_refactor,
+    viz_html_path_from_generate_stdout,
 )
 
 
@@ -151,6 +153,19 @@ def test_generate_graph_renders_summary():
     assert "10" in out  # file nodes
     assert "15" in out  # file edges
     assert "/tmp/graph.html" in out
+
+
+def test_viz_html_path_from_generate_stdout_relative():
+    stdout = "x\nGenerated: visualization/output/C_repo_stem.html\n"
+    cwd = Path("/workspace/repo")
+    p = viz_html_path_from_generate_stdout(stdout, cwd)
+    assert p == (cwd / "visualization/output/C_repo_stem.html").resolve()
+
+
+def test_viz_html_path_from_generate_stdout_absolute():
+    stdout = "Generated: /tmp/abs.html\n"
+    p = viz_html_path_from_generate_stdout(stdout, Path("/ignored"))
+    assert p == Path("/tmp/abs.html").resolve()
 
 
 def test_metric_graph_node_shape():

@@ -65,6 +65,7 @@ from formatters import (
     format_generate_graph,
     format_module_health,
     format_suggest_refactor,
+    viz_html_path_from_generate_stdout,
 )
 
 load_dotenv()  # so a local .env file works without pre-exporting
@@ -554,13 +555,9 @@ def _parse_viz_stdout(stdout: str, output_path: str) -> dict:
 
 def _generate_graph_for_path(repo_path: str) -> str:
     """Run the visualization module to generate an interactive dependency graph."""
-    output_path = _REPO_ROOT / "visualization" / "output" / "graph.html"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     cmd = [
         sys.executable, "-m", "visualization.generate_graph",
         "--path", repo_path,
-        "--output", str(output_path),
         "--no-browser",
     ]
     proc = subprocess.run(
@@ -571,7 +568,8 @@ def _generate_graph_for_path(repo_path: str) -> str:
     if proc.returncode != 0:
         return f"Graph generation failed (exit {proc.returncode}): {proc.stderr.strip()}"
 
-    result = _parse_viz_stdout(proc.stdout, str(output_path.resolve()))
+    output_path = viz_html_path_from_generate_stdout(proc.stdout, _REPO_ROOT)
+    result = _parse_viz_stdout(proc.stdout, str(output_path))
     return format_generate_graph(result)
 
 

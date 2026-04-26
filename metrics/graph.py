@@ -171,8 +171,13 @@ def _main() -> None:
         edge_color="gray",
     )
 
-    for cycle in nx.simple_cycles(graph):
-        print(cycle)
+    for scc in nx.strongly_connected_components(graph):
+        if len(scc) >= 2:
+            print(sorted(scc))
+        else:
+            n = next(iter(scc))
+            if graph.has_edge(n, n):
+                print([n])
 
     folder_name = source_root.name
     plt.title(f"{folder_name} internal import graph  (A -> B means A imports from B)")

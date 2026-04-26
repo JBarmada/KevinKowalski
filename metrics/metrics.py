@@ -3,7 +3,6 @@
 import ast
 import pathlib
 
-import jedi
 import networkx as nx
 from pydantic import BaseModel
 from pyvis.network import Network
@@ -55,16 +54,22 @@ def compute_metrics(
         instability = ce / (ca + ce) if (ca + ce) > 0 else 0.5
         base[node] = (ca, ce, instability)
 
+    sum_ca_dependents: dict[str, float] = {n: 0.0 for n in graph}
+    sum_ce_dependencies: dict[str, float] = {n: 0.0 for n in graph}
+    for n, s in graph.edges():
+        sum_ca_dependents[s] += base[n][0]
+        sum_ce_dependencies[n] += base[s][1]
+
     metrics: dict[str, NodeMetrics] = {}
     for node in graph.nodes():
         ca, ce, instability = base[node]
-        # Raw sums (no coefficients applied inside the summation).
-        sum_ca_dependents = sum(base[p][0] for p in graph.predecessors(node))
-        sum_ce_dependencies = sum(base[s][1] for s in graph.successors(node))
-        impact = coef_impact_ca_node * ca + coef_impact_sum_ca_dependents * sum_ca_dependents
+        impact = (
+            coef_impact_ca_node * ca
+            + coef_impact_sum_ca_dependents * sum_ca_dependents[node]
+        )
         susceptibility = (
             coef_susceptibility_ce_node * ce
-            + coef_susceptibility_sum_ce_dependencies * sum_ce_dependencies
+            + coef_susceptibility_sum_ce_dependencies * sum_ce_dependencies[node]
         )
         metrics[node] = NodeMetrics(
             ca=ca,
@@ -126,58 +131,9 @@ def _get_file_dependency_graph(root: pathlib.Path) -> nx.DiGraph:
 
 def _get_function_dependency_graph(root: pathlib.Path) -> nx.DiGraph:
     """Build a directed graph where nodes are functions and edges are call relationships."""
-    graph = nx.DiGraph()
-    project = jedi.Project(root)
-    files = sorted(root.rglob("*.py"))
+    from visualization.utils import build_function_graph
 
-    for filepath in files:
-        source = filepath.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        script = jedi.Script(path=str(filepath), project=project)
-
-        for function in ast.walk(tree):
-            if not isinstance(function, ast.FunctionDef):
-                continue
-
-            caller_id = node_id(function.name, filepath, function.lineno)
-            graph.add_node(caller_id, label=function.name)
-
-            for node in ast.walk(function):
-                if not isinstance(node, ast.Call):
-                    continue
-
-                # NOTE: [pedagogical] jedi.goto() resolves a name at a given
-                # (line, column) to its definition, potentially in another file.
-                # We point at the end of the func expression so jedi sees the
-                # full dotted name rather than an intermediate attribute.
-                call_line = node.func.end_lineno
-                call_col = node.func.end_col_offset
-                # NOTE: [edge case callout] for multi-line expressions, end_col_offset
-                # can exceed the length of end_lineno's line — clamp it to be safe.
-                source_line = source.splitlines()[call_line - 1]
-                call_col = min(call_col, len(source_line))
-                try:
-                    definitions = script.goto(line=call_line, column=call_col)
-                except Exception:
-                    continue
-
-                for definition in definitions:
-                    if definition.type != "function":
-                        continue
-                    if definition.module_path is None:
-                        continue
-
-                    # NOTE: [thought process] skip definitions outside our source
-                    # dir — stdlib and third-party calls aren't what we want to map.
-                    if not str(definition.module_path).startswith(str(root)):
-                        continue
-
-                    callee_id = node_id(
-                        definition.name, definition.module_path, definition.line
-                    )
-                    graph.add_node(callee_id, label=definition.name)
-                    graph.add_edge(caller_id, callee_id)
-
+    graph, _ = build_function_graph(root)
     return graph
 
 

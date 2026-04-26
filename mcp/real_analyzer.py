@@ -291,11 +291,13 @@ def _attach_violations(modules: dict[str, ModuleMetrics], graph: nx.DiGraph) -> 
             importee.violations.append("SDP")
 
     in_cycle: set[str] = set()
-    try:
-        for cycle in nx.simple_cycles(graph):
-            in_cycle.update(cycle)
-    except Exception:
-        pass
+    for scc in nx.strongly_connected_components(graph):
+        if len(scc) >= 2:
+            in_cycle.update(scc)
+        else:
+            n = next(iter(scc))
+            if graph.has_edge(n, n):
+                in_cycle.add(n)
     for mod in in_cycle:
         if mod in modules and "CYCLE" not in modules[mod].violations:
             modules[mod].violations.append("CYCLE")

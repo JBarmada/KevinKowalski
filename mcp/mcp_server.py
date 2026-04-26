@@ -38,6 +38,7 @@ from formatters import (
     format_module_health,
     format_refactor_assistance,
     format_suggest_refactor,
+    viz_html_path_from_generate_stdout,
 )
 
 
@@ -394,25 +395,29 @@ def generate_graph(path: str, output: str = "") -> str:
     Args:
         path: Absolute filesystem path to the repo root. Required -- '.' and
             empty strings are rejected.
-        output: Optional output path for the HTML file. Defaults to
-            visualization/output/graph.html relative to the repo root.
+        output: Optional output path for the HTML file. Defaults to the same
+            path the CLI uses: visualization/output/<stem>.html under the
+            Kowalski repo, where <stem> is derived from the analyzed path.
     """
     repo = _resolve_path(path)
     log.info("generate_graph: %s", repo)
 
     if output:
         output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            sys.executable, "-m", "visualization.generate_graph",
+            "--path", repo,
+            "--output", str(output_path),
+            "--no-browser",
+        ]
     else:
-        output_path = _REPO_ROOT / "visualization" / "output" / "graph.html"
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        sys.executable, "-m", "visualization.generate_graph",
-        "--path", repo,
-        "--output", str(output_path),
-        "--no-browser",
-    ]
+        output_path = None
+        cmd = [
+            sys.executable, "-m", "visualization.generate_graph",
+            "--path", repo,
+            "--no-browser",
+        ]
     proc = subprocess.run(
         cmd, cwd=str(_REPO_ROOT),
         capture_output=True, text=True, timeout=120,
@@ -423,7 +428,12 @@ def generate_graph(path: str, output: str = "") -> str:
             f"Visualization failed (exit {proc.returncode}): {proc.stderr.strip()}"
         )
 
-    result = _parse_viz_stdout(proc.stdout, str(output_path.resolve()))
+    if output_path is None:
+        output_path = viz_html_path_from_generate_stdout(proc.stdout, Path(_REPO_ROOT))
+    else:
+        output_path = output_path.resolve()
+
+    result = _parse_viz_stdout(proc.stdout, str(output_path))
     return format_generate_graph(result)
 
 

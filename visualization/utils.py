@@ -1,13 +1,54 @@
 """Parsing and metric utilities for dependency graph analysis."""
 
 import ast
+import os
+import re
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 import jedi
 import networkx as nx
 
-_SKIP_DIRS = {".venv", ".git", "__pycache__", "node_modules", ".tox", ".eggs", ".mypy_cache"}
+# Names matched case-sensitively; include common venv layouts (``venv/`` is not ``.venv/``).
+_SKIP_DIRS = frozenset(
+    {
+        ".venv",
+        "venv",
+        ".git",
+        "__pycache__",
+        "node_modules",
+        ".tox",
+        ".eggs",
+        ".mypy_cache",
+        "site-packages",
+        "dist",
+        "build",
+        ".nox",
+        "htmlcov",
+        ".pytest_cache",
+        ".ruff_cache",
+    }
+)
+
+
+def output_stem_for_source_root(source_root: Path, *, max_len: int = 200) -> str:
+    """Single filesystem-safe token from ``source_root`` (typically resolved).
+
+    Encodes the full path using underscores instead of separators, strips
+    characters illegal in Windows or POSIX file names and control characters),
+    and collapses repeated underscores.
+    """
+    posix = source_root.resolve().as_posix()
+    s = posix.replace(":", "_")
+    s = re.sub(r'[<>"/\\|?*\x00-\x1f]', "_", s)
+    s = s.replace("/", "_")
+    s = re.sub(r"_+", "_", s).strip("._")
+    if not s:
+        s = "graph"
+    if len(s) > max_len:
+        s = s[:max_len].rstrip("_")
+    return s
 
 
 def _iter_python_files(source_root: Path) -> list[Path]:
@@ -245,20 +286,25 @@ def compute_metrics(
         instability = ce / (ca + ce) if (ca + ce) > 0 else 0.5
         base[node] = (ca, ce, instability)
 
-    # Second pass: raw impact/susceptibility using neighbors' Ca/Ce
+    # Second pass: raw impact/susceptibility — one edge scan (O(|E|)) instead of
+    # per-node predecessor/successor walks (same asymptotic but better locality).
+    sum_ca_dependents: dict[str, float] = {n: 0.0 for n in graph}
+    sum_ce_dependencies: dict[str, float] = {n: 0.0 for n in graph}
+    for n, s in graph.edges():  # n -> s means n depends on s
+        sum_ca_dependents[s] += base[n][0]
+        sum_ce_dependencies[n] += base[s][1]
+
     raw_impact: dict[str, float] = {}
     raw_susceptibility: dict[str, float] = {}
     for node in graph.nodes():
         ca, ce, _ = base[node]
-        sum_ca_dependents = sum(base[p][0] for p in graph.predecessors(node))
-        sum_ce_dependencies = sum(base[s][1] for s in graph.successors(node))
         raw_impact[node] = (
             coef_impact_ca_node * ca
-            + coef_impact_sum_ca_dependents * sum_ca_dependents
+            + coef_impact_sum_ca_dependents * sum_ca_dependents[node]
         )
         raw_susceptibility[node] = (
             coef_susceptibility_ce_node * ce
-            + coef_susceptibility_sum_ce_dependencies * sum_ce_dependencies
+            + coef_susceptibility_sum_ce_dependencies * sum_ce_dependencies[node]
         )
 
     # Normalize to [0,1]
@@ -281,17 +327,25 @@ def compute_metrics(
 
 
 def find_cycle_info(graph: nx.DiGraph) -> tuple[set[str], set[tuple[str, str]]]:
-    """Find all nodes and edges that participate in cycles."""
+    """Find all nodes and edges that participate in at least one directed cycle.
+
+    Uses strongly connected components (linear in |V|+|E|) instead of enumerating
+    ``nx.simple_cycles``, which is exponential and can hang on dense cyclic graphs.
+    Nodes in an SCC of size >= 2, or with a self-loop, lie on a cycle; every edge
+    internal to such an SCC lies on some simple cycle.
+    """
     cycle_nodes: set[str] = set()
     cycle_edges: set[tuple[str, str]] = set()
 
-    for cycle in nx.simple_cycles(graph):
-        for node in cycle:
-            cycle_nodes.add(node)
-        for i in range(len(cycle)):
-            src = cycle[i]
-            dst = cycle[(i + 1) % len(cycle)]
-            cycle_edges.add((src, dst))
+    for scc in nx.strongly_connected_components(graph):
+        if len(scc) >= 2:
+            cycle_nodes.update(scc)
+            cycle_edges.update(graph.subgraph(scc).edges())
+        else:
+            n = next(iter(scc))
+            if graph.has_edge(n, n):
+                cycle_nodes.add(n)
+                cycle_edges.add((n, n))
 
     return cycle_nodes, cycle_edges
 
@@ -355,82 +409,162 @@ def _node_id(name: str, module_path: Path, line: int) -> str:
     return f"{module_path.stem}__{name}__{line}"
 
 
+class _FunctionCallCollector(ast.NodeVisitor):
+    """Single AST walk: each Call is attributed to the innermost enclosing function.
+
+    Avoids ``ast.walk(tree)`` × ``ast.walk(function)``, which revisits nested subtrees
+    many times (superlinear in module size) and mis-attributes calls inside nested
+    function bodies to the outer function.
+    """
+
+    __slots__ = ("filepath", "rel_path", "stack", "calls", "function_metas")
+
+    def __init__(self, filepath: Path, rel_path: str) -> None:
+        self.filepath = filepath
+        self.rel_path = rel_path
+        self.stack: list[str] = []
+        self.calls: list[tuple[str, int, int]] = []
+        self.function_metas: dict[str, dict] = {}
+
+    def _enter_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        caller_id = _node_id(node.name, self.filepath, node.lineno)
+        self.function_metas[caller_id] = {
+            "label": node.name,
+            "file_path": self.rel_path,
+            "line": node.lineno,
+        }
+        self.stack.append(caller_id)
+
+    def _exit_function(self) -> None:
+        self.stack.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._enter_function(node)
+        self.generic_visit(node)
+        self._exit_function()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._enter_function(node)
+        self.generic_visit(node)
+        self._exit_function()
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if self.stack:
+            el = node.func.end_lineno
+            ec = node.func.end_col_offset
+            if el is not None and ec is not None:
+                self.calls.append((self.stack[-1], el, ec))
+        self.generic_visit(node)
+
+
+def _function_graph_worker(args: tuple[str, str]) -> tuple[list[tuple[str, str]], dict[str, dict]]:
+    """Analyze one file for function call edges. Top-level for multiprocessing pickling."""
+    source_root_str, filepath_str = args
+    source_root = Path(source_root_str).resolve()
+    filepath = Path(filepath_str).resolve()
+    edges: list[tuple[str, str]] = []
+    metadata: dict[str, dict] = {}
+
+    try:
+        source = filepath.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except (SyntaxError, UnicodeDecodeError, OSError):
+        return edges, metadata
+
+    rel_path = str(filepath.relative_to(source_root))
+    source_lines = source.splitlines()
+    project = jedi.Project(source_root)
+    script = jedi.Script(path=str(filepath), project=project)
+
+    collector = _FunctionCallCollector(filepath, rel_path)
+    collector.visit(tree)
+    metadata.update(collector.function_metas)
+
+    root_prefix = str(source_root)
+    goto_cache: dict[tuple[int, int], list] = {}
+    for caller_id, call_line, call_col in collector.calls:
+        li = call_line - 1
+        if 0 <= li < len(source_lines):
+            col = min(call_col, len(source_lines[li]))
+        else:
+            col = call_col
+        gkey = (call_line, col)
+        if gkey not in goto_cache:
+            try:
+                goto_cache[gkey] = script.goto(line=call_line, column=col)
+            except Exception:
+                goto_cache[gkey] = []
+        definitions = goto_cache[gkey]
+
+        for definition in definitions:
+            if definition.type != "function":
+                continue
+            if definition.module_path is None:
+                continue
+            def_path = Path(definition.module_path).resolve()
+            if not str(def_path).startswith(root_prefix):
+                continue
+            try:
+                callee_rel = str(def_path.relative_to(source_root))
+            except ValueError:
+                continue
+            if any(part in _SKIP_DIRS or part.startswith(".") for part in Path(callee_rel).parts):
+                continue
+
+            callee_id = _node_id(definition.name, def_path, definition.line)
+            edges.append((caller_id, callee_id))
+            if callee_id not in metadata:
+                metadata[callee_id] = {
+                    "label": definition.name,
+                    "file_path": callee_rel,
+                    "line": definition.line,
+                }
+
+    return edges, metadata
+
+
 def build_function_graph(source_root: Path) -> tuple[nx.DiGraph, dict[str, dict]]:
     """Build a function-level dependency graph using Jedi for cross-module resolution.
+
+    Uses one AST pass per file (no nested ``ast.walk`` over every function body),
+    optional process parallelism across files (Jedi is isolated per worker), and
+    bulk NetworkX construction. Set ``KOWALSKI_FUNCTION_GRAPH_SERIAL=1`` to force
+    single-process mode.
 
     Returns:
         (graph, node_metadata): graph with function nodes and call edges,
         and metadata mapping node_id -> {label, file_path, line}.
     """
-    graph = nx.DiGraph()
+    source_root_res = source_root.resolve()
+    files = _iter_python_files(source_root_res)
+    root_str = str(source_root_res)
+    tasks = [(root_str, str(f.resolve())) for f in files]
+
+    serial = os.environ.get("KOWALSKI_FUNCTION_GRAPH_SERIAL", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    n_cpu = os.cpu_count() or 1
+    use_parallel = not serial and len(tasks) >= 8 and n_cpu > 1
+
+    if use_parallel:
+        max_workers = min(len(tasks), max(1, n_cpu), 16)
+        chunksize = max(1, len(tasks) // (max_workers * 4))
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            chunks = list(ex.map(_function_graph_worker, tasks, chunksize=chunksize))
+    else:
+        chunks = [_function_graph_worker(t) for t in tasks]
+
+    all_edges: list[tuple[str, str]] = []
     metadata: dict[str, dict] = {}
-    project = jedi.Project(source_root)
-    files = _iter_python_files(source_root)
+    for e, m in chunks:
+        all_edges.extend(e)
+        for k, v in m.items():
+            if k not in metadata:
+                metadata[k] = v
 
-    for filepath in files:
-        try:
-            source = filepath.read_text(encoding="utf-8")
-            tree = ast.parse(source)
-        except (SyntaxError, UnicodeDecodeError):
-            continue
-
-        script = jedi.Script(path=str(filepath), project=project)
-        rel_path = str(filepath.relative_to(source_root))
-
-        for function in ast.walk(tree):
-            if not isinstance(function, ast.FunctionDef):
-                continue
-
-            caller_id = _node_id(function.name, filepath, function.lineno)
-            graph.add_node(caller_id, label=function.name)
-            metadata[caller_id] = {
-                "label": function.name,
-                "file_path": rel_path,
-                "line": function.lineno,
-            }
-
-            for node in ast.walk(function):
-                if not isinstance(node, ast.Call):
-                    continue
-
-                call_line = node.func.end_lineno
-                call_col = node.func.end_col_offset
-                if call_line is None or call_col is None:
-                    continue
-                source_lines = source.splitlines()
-                if call_line - 1 < len(source_lines):
-                    call_col = min(call_col, len(source_lines[call_line - 1]))
-                try:
-                    definitions = script.goto(line=call_line, column=call_col)
-                except Exception:
-                    continue
-
-                for definition in definitions:
-                    if definition.type != "function":
-                        continue
-                    if definition.module_path is None:
-                        continue
-                    def_path = Path(definition.module_path).resolve()
-                    if not str(def_path).startswith(str(source_root)):
-                        continue
-                    # Skip definitions inside .venv or hidden dirs
-                    try:
-                        callee_rel = str(def_path.relative_to(source_root))
-                    except ValueError:
-                        continue
-                    if any(part in _SKIP_DIRS or part.startswith(".") for part in Path(callee_rel).parts):
-                        continue
-
-                    callee_id = _node_id(
-                        definition.name, def_path, definition.line
-                    )
-                    graph.add_node(callee_id, label=definition.name)
-                    if callee_id not in metadata:
-                        metadata[callee_id] = {
-                            "label": definition.name,
-                            "file_path": callee_rel,
-                            "line": definition.line,
-                        }
-                    graph.add_edge(caller_id, callee_id)
-
+    graph = nx.DiGraph()
+    graph.add_nodes_from((nid, {"label": meta["label"]}) for nid, meta in metadata.items())
+    graph.add_edges_from(all_edges)
     return graph, metadata
