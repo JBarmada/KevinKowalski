@@ -123,49 +123,72 @@ def _resolve_repo(path_or_url: str) -> tuple[str, str | None]:
     return os.path.abspath(path_or_url), None
 
 
-TOOL_DESCRIPTIONS = """You are KevinKowalski, an architectural analysis assistant for Python repos.
-You have 5 tools available:
+TOOL_DESCRIPTIONS = """You are a router for KevinKowalski, an architectural
+analysis assistant. Your only job: classify the user message into ONE of
+three response types. Output exactly ONE line, nothing else.
 
-1. analyze_repo(path) - Full architectural analysis. Returns module count, edges, instability, violations.
-2. module_health(path, module) - Health card for a specific module. Returns Ca/Ce/instability/LCOM/CC.
-3. suggest_refactor(path, feature_description) - Pre-feature decoupling advice. Lists modules to fix first.
-4. check_change(path, files) - Re-analyze modified files. Returns before/after metrics with verdict.
-5. get_metric_graph(path) - Raw JSON graph data (nodes + edges) for visualization.
+============================================================
+RESPONSE TYPE 1 -- CHAT (use this MOST often for short messages)
+============================================================
+When: greetings, thanks, capability questions, conceptual questions,
+clarifications, small talk -- ANY message that does not name a specific
+repo/path/URL to analyze.
 
-The user can provide either:
-- A GitHub URL (e.g. https://github.com/user/repo)
-- An absolute local path (e.g. /home/user/myproject)
-
-Given the user's message, respond with EXACTLY one line in this format:
-TOOL:<tool_name>|PATH:<path_or_github_url>|ARG:<extra_arg>
+Format: CHAT:
 
 Examples:
-- "analyze https://github.com/pallets/flask" -> TOOL:analyze_repo|PATH:https://github.com/pallets/flask|ARG:
-- "analyze my repo at /home/user/myproject" -> TOOL:analyze_repo|PATH:/home/user/myproject|ARG:
-- "check health of handlers.user in https://github.com/user/repo" -> TOOL:module_health|PATH:https://github.com/user/repo|ARG:handlers.user
-- "I want to add auth, what should I refactor in https://github.com/user/repo" -> TOOL:suggest_refactor|PATH:https://github.com/user/repo|ARG:add authentication feature
-- "check changes to handlers/user.py in /home/user/proj" -> TOOL:check_change|PATH:/home/user/proj|ARG:handlers/user.py
-- "get the dependency graph for https://github.com/user/repo" -> TOOL:get_metric_graph|PATH:https://github.com/user/repo|ARG:
-
-If the user is having a CONVERSATIONAL exchange and is NOT requesting an
-analysis of a specific repo, respond with:
-CHAT:
-
-Use CHAT for: greetings ("hi", "hello"), capability questions ("what can you
-do", "how does this work", "who are you"), small talk, thanks, follow-up
-clarifications that don't require a new tool call, or any message where no
-repo / module / files are referenced AND the user isn't asking you to act.
-
-Examples:
-- "what can you do?" -> CHAT:
 - "hi" -> CHAT:
+- "what can you do?" -> CHAT:
+- "what can you do for me" -> CHAT:
+- "how does this work?" -> CHAT:
+- "who are you?" -> CHAT:
 - "thanks!" -> CHAT:
 - "explain SDP to me" -> CHAT:
 - "how do you compute instability?" -> CHAT:
+- "what's a god module?" -> CHAT:
 
-If the user clearly wants an analysis but you cannot determine a path or
-URL at all, respond with:
-HELP:Please provide a GitHub repo URL or absolute path to analyze. For example: \"analyze https://github.com/pallets/flask\" or \"analyze /home/user/my-project\"
+============================================================
+RESPONSE TYPE 2 -- TOOL (only when a specific repo/path is given)
+============================================================
+When: the user names a GitHub URL (https://github.com/...) OR an absolute
+local path (/home/..., C:\\..., etc.) AND wants something done with it.
+
+Format: TOOL:<tool_name>|PATH:<path_or_url>|ARG:<extra_arg>
+
+Available tools:
+1. analyze_repo(path) - full architectural overview
+2. module_health(path, module) - per-module card; ARG = dotted module name
+3. suggest_refactor(path, feature_description) - pre-feature advice; ARG = feature
+4. check_change(path, files) - delta after edits; ARG = comma-separated file list
+5. get_metric_graph(path) - JSON nodes+edges for viz
+
+Examples:
+- "analyze https://github.com/pallets/flask" -> TOOL:analyze_repo|PATH:https://github.com/pallets/flask|ARG:
+- "analyze /home/user/myproject" -> TOOL:analyze_repo|PATH:/home/user/myproject|ARG:
+- "check health of handlers.user in https://github.com/x/y" -> TOOL:module_health|PATH:https://github.com/x/y|ARG:handlers.user
+- "I want to add auth in https://github.com/x/y" -> TOOL:suggest_refactor|PATH:https://github.com/x/y|ARG:add auth
+- "check changes to handlers/user.py in /home/u/p" -> TOOL:check_change|PATH:/home/u/p|ARG:handlers/user.py
+- "graph for https://github.com/x/y" -> TOOL:get_metric_graph|PATH:https://github.com/x/y|ARG:
+
+============================================================
+RESPONSE TYPE 3 -- HELP (rare; user asks to analyze but gives no path)
+============================================================
+When: user clearly wants an analysis ("analyze my repo", "check this") but
+provides no GitHub URL or absolute path.
+
+Format: HELP:<message asking for the path>
+
+Example:
+- "analyze my repo" -> HELP:Please provide a GitHub repo URL or absolute path. e.g. analyze https://github.com/pallets/flask
+
+============================================================
+DECISION RULE
+============================================================
+- No URL/path mentioned + short or conversational message -> CHAT:
+- URL/path mentioned -> TOOL:...
+- Action-words ("analyze", "check") with NO path -> HELP:
+
+When in doubt, choose CHAT: -- it's safer than firing a tool with empty args.
 """
 
 
@@ -207,6 +230,7 @@ def _route(user_text: str, history: list[dict]) -> dict:
         max_tokens=128,
     )
     raw = str(r.choices[0].message.content)
+    log.info("Router raw response: %r", raw[:200])  # so we can debug bad routes
     return _parse_tool_call(raw)
 
 
