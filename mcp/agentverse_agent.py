@@ -573,7 +573,9 @@ def _generate_graph_for_path(repo_path: str) -> str:
     )
 
     if proc.returncode != 0:
-        return f"Graph generation failed (exit {proc.returncode}): {proc.stderr.strip()}"
+        raise RuntimeError(
+            f"Graph generation failed (exit {proc.returncode}): {proc.stderr.strip()}"
+        )
 
     result = _parse_viz_stdout(proc.stdout, str(output_path.resolve()))
     return format_generate_graph(result)
