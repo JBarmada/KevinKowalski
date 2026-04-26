@@ -147,10 +147,24 @@ Examples:
 - "check changes to handlers/user.py in /home/user/proj" -> TOOL:check_change|PATH:/home/user/proj|ARG:handlers/user.py
 - "get the dependency graph for https://github.com/user/repo" -> TOOL:get_metric_graph|PATH:https://github.com/user/repo|ARG:
 
-If the user's message doesn't clearly map to a tool, or is a general question about architecture, respond with:
-TOOL:analyze_repo|PATH:<best_guess_path_or_url>|ARG:
+If the user is having a CONVERSATIONAL exchange and is NOT requesting an
+analysis of a specific repo, respond with:
+CHAT:
 
-If you cannot determine a path or URL at all, respond with:
+Use CHAT for: greetings ("hi", "hello"), capability questions ("what can you
+do", "how does this work", "who are you"), small talk, thanks, follow-up
+clarifications that don't require a new tool call, or any message where no
+repo / module / files are referenced AND the user isn't asking you to act.
+
+Examples:
+- "what can you do?" -> CHAT:
+- "hi" -> CHAT:
+- "thanks!" -> CHAT:
+- "explain SDP to me" -> CHAT:
+- "how do you compute instability?" -> CHAT:
+
+If the user clearly wants an analysis but you cannot determine a path or
+URL at all, respond with:
 HELP:Please provide a GitHub repo URL or absolute path to analyze. For example: \"analyze https://github.com/pallets/flask\" or \"analyze /home/user/my-project\"
 """
 
@@ -158,6 +172,9 @@ HELP:Please provide a GitHub repo URL or absolute path to analyze. For example: 
 def _parse_tool_call(llm_response: str) -> dict:
     """Parse the LLM's structured tool-call response into a dict."""
     line = llm_response.strip().splitlines()[0].strip()
+
+    if line.startswith("CHAT:"):
+        return {"tool": "chat"}
 
     if line.startswith("HELP:"):
         return {"tool": "help", "message": line[5:].strip()}
@@ -209,25 +226,55 @@ a module name).
 Be direct and useful. No preamble, no "Here is a summary:", just the summary."""
 
 
+_CHAT_SYSTEM = """You are KevinKowalski, a friendly architectural analysis assistant for Python repos.
+
+The user is having a CONVERSATIONAL exchange -- not asking for a specific
+analysis. Respond directly and warmly. Keep it short (2-5 sentences).
+
+Capabilities you can talk about:
+- Analyzing a Python repo's architecture: coupling (Ca/Ce), instability,
+  cohesion (LCOM4), cyclomatic complexity
+- Pointing out which modules to refactor BEFORE adding a new feature
+- Verifying whether a change improved or worsened the architecture
+- Returning the dependency graph as JSON for visualization
+
+You accept GitHub URLs or absolute local paths. Invite them to try
+"analyze https://github.com/<owner>/<repo>" if the moment is right, but
+don't push -- if they're just saying hi, just say hi back.
+
+Do NOT pretend you've already analyzed something. Do NOT make up metrics.
+Do NOT use a horizontal rule (---) -- this is a plain conversational reply."""
+
+
 def _summarize(
     user_text: str, tool_name: str, raw_output: str, history: list[dict]
 ) -> str:
-    """Second pass: bigger model writes a natural-language take on the tool result."""
-    messages = [{"role": "system", "content": _SUMMARIZER_SYSTEM}]
+    """Second pass: bigger model writes a natural-language take on the tool result.
+
+    When tool_name == "chat", we're in conversational mode -- no tool was
+    called, no raw output to summarize. Use a different system prompt and
+    skip the tool-output framing.
+    """
+    is_chat = tool_name == "chat"
+    system = _CHAT_SYSTEM if is_chat else _SUMMARIZER_SYSTEM
+    messages = [{"role": "system", "content": system}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
-    messages.append(
-        {
-            "role": "assistant",
-            "content": f"[Called tool `{tool_name}`. Output below.]\n\n{raw_output}",
-        }
-    )
-    messages.append(
-        {
-            "role": "user",
-            "content": "Now write your short summary as instructed.",
-        }
-    )
+
+    if not is_chat:
+        messages.append(
+            {
+                "role": "assistant",
+                "content": f"[Called tool `{tool_name}`. Output below.]\n\n{raw_output}",
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": "Now write your short summary as instructed.",
+            }
+        )
+
     r = client.chat.completions.create(
         model=_SUMMARIZER_MODEL,
         messages=messages,
@@ -311,6 +358,10 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
 
             if parsed["tool"] == "help":
                 response_text = parsed["message"]
+            elif parsed["tool"] == "chat":
+                # Conversational reply -- no tool, no raw output appendix.
+                # Single LLM call instead of two; ~half the latency.
+                response_text = _summarize(text, "chat", "", history)
             else:
                 # Run the tool (raw Markdown)
                 raw = _run_tool(parsed["tool"], parsed["path"], parsed["arg"])
