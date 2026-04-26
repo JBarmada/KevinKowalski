@@ -12,8 +12,8 @@ from pyvis.network import Network
 class NodeMetrics(BaseModel, frozen=True):
     """Coupling metrics for a single node in a dependency graph."""
 
-    ca: int            # afferent coupling — how many nodes depend on this one
-    ce: int            # efferent coupling — how many nodes this one depends on
+    ca: int  # afferent coupling — how many nodes depend on this one
+    ce: int  # efferent coupling — how many nodes this one depends on
     instability: float  # ce / (ca + ce); 0 = maximally stable, 1 = maximally unstable
 
 
@@ -137,67 +137,23 @@ def _get_function_dependency_graph(root: pathlib.Path) -> nx.DiGraph:
 
 
 def get_metrics(root: pathlib.Path):
-    graph = _get_file_dependency_graph(root)
+    graph = _get_function_dependency_graph(root)
+    # graph = _get_file_dependency_graph(root)
     metrics = compute_metrics(graph)
 
     for node, m in sorted(metrics.items()):
         print(f"{node}: Ca={m.ca}, Ce={m.ce}, I={m.instability:.2f}")
 
-    net = Network(directed=True)
+    net = Network(directed=True, height="100vh", width="100%", cdn_resources="remote")
     net.from_nx(graph)
-    # NOTE: [thought process] the defaults cluster tightly because centralGravity
-    # pulls hard and springLength is short. Cranking up repulsion and spring length
-    # lets the graph breathe.
-    net.set_options("""{
-        "physics": {
-            "barnesHut": {
-                "gravitationalConstant": -8000,
-                "centralGravity": 0.05,
-                "springLength": 250,
-                "springConstant": 0.01,
-                "damping": 0.15
-            }
-        }
-    }""")
-    net.show("graph.html", notebook=False)
-    """
-    we need to output the following:
-        - Ca
-        - Ce
-        - Instability
-        - Cyclomatic complexity
-        - github change frequency?
-
-    for both files and functions.
-
-    then we say what is likely to change.
-
-    output as some kind of structured data; they'll handle it.
-
-    also can pass repo-level information in addition to the dicts of function-value and file-value pairs
-
-
-    we're looking at how likely changes are to propagate
-    average instability of dependencies as proxy for how likely this is to change
-    also look at is it actively being developed
-
-    look at probability of receving incidental update
-        - every piece of code should have lowest chance possible of being forced to change.
-
-
-    focus on this stuff for files (files vs functions is kind of just a zoom in zoom out kind of thing)
-
-
-
-    we really do want to just limit the probability of changes propagating.
-
-
-    your understanding does not have to propagate either
-    """
+    print(graph.number_of_edges())
+    output_path = pathlib.Path("graph.html")
+    output_path.write_text(net.generate_html())
+    # net.show("graph.html", notebook=False)
 
 
 if __name__ == "__main__":
     import sys
 
-    root = pathlib.Path(sys.argv[1])
+    root = pathlib.Path(sys.argv[1]).resolve()
     get_metrics(root)
