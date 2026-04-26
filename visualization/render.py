@@ -335,6 +335,12 @@ div.vis-network div.vis-navigation div.vis-button:active {
         if (mode === 'default') return holisticColor(m.impact);
         if (mode === 'susceptibility') return susceptibilityColor(m.susceptibility);
         if (mode === 'impact') return impactColor(m.impact);
+        if (mode === 'cycles') {{
+            var cycleData = allCycles[currentView];
+            var cycleNodeSet = new Set(cycleData ? cycleData.nodes : []);
+            if (cycleNodeSet.has(nodeId)) return '#ff4444';
+            return '#333';
+        }}
         return holisticColor(m.impact);
     }}
 
@@ -501,7 +507,6 @@ div.vis-network div.vis-navigation div.vis-button:active {
         network.unselectAll();
         setColorMode(currentColorMode);
     }}
-
     function focusOnNode(nodeId) {{
         focusedNode = nodeId;
         var connectedNodes = new Set(network.getConnectedNodes(nodeId));
