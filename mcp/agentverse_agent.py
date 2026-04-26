@@ -5,17 +5,22 @@ on Agentverse with the Chat Protocol, making them accessible via ASI:One.
 
 Users send natural-language queries through ASI:One Chat; this agent parses
 the intent, runs the appropriate analysis tool, and returns the Markdown
-result.
+result. Accepts GitHub repo URLs — repos are cloned automatically.
 
 Requires:
     - ASI_ONE_API_KEY env var (get one at https://asi1.ai/dashboard/api-keys)
     - An Agentverse account (https://agentverse.ai)
     - uagents library (`uv add uagents`)
+    - git (for cloning repos from GitHub URLs)
 """
 
 import logging
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from uuid import uuid4
 
@@ -66,6 +71,36 @@ agent = Agent(
 
 protocol = Protocol(spec=chat_protocol_spec)
 
+_GITHUB_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?github\.com/([\w.\-]+/[\w.\-]+)(?:\.git)?/?"
+)
+
+
+def _resolve_repo(path_or_url: str) -> tuple[str, str | None]:
+    """If path_or_url is a GitHub URL, clone it and return (local_path, tmp_dir).
+    If it's a local path, return (path, None). tmp_dir should be cleaned up after use."""
+    match = _GITHUB_URL_RE.search(path_or_url)
+    if match:
+        repo_slug = match.group(1)
+        clone_url = f"https://github.com/{repo_slug}.git"
+        tmp_dir = tempfile.mkdtemp(prefix="kowalski_")
+        repo_dir = os.path.join(tmp_dir, "repo")
+        log.info("Cloning %s into %s", clone_url, repo_dir)
+        try:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", clone_url, repo_dir],
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+        if result.returncode != 0:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise RuntimeError(f"Failed to clone {clone_url}: {result.stderr.strip()}")
+        return repo_dir, tmp_dir
+    return os.path.abspath(path_or_url), None
+
+
 TOOL_DESCRIPTIONS = """You are KevinKowalski, an architectural analysis assistant for Python repos.
 You have 5 tools available:
 
@@ -75,21 +110,26 @@ You have 5 tools available:
 4. check_change(path, files) - Re-analyze modified files. Returns before/after metrics with verdict.
 5. get_metric_graph(path) - Raw JSON graph data (nodes + edges) for visualization.
 
+The user can provide either:
+- A GitHub URL (e.g. https://github.com/user/repo)
+- An absolute local path (e.g. /home/user/myproject)
+
 Given the user's message, respond with EXACTLY one line in this format:
-TOOL:<tool_name>|PATH:<path>|ARG:<extra_arg>
+TOOL:<tool_name>|PATH:<path_or_github_url>|ARG:<extra_arg>
 
 Examples:
+- "analyze https://github.com/pallets/flask" -> TOOL:analyze_repo|PATH:https://github.com/pallets/flask|ARG:
 - "analyze my repo at /home/user/myproject" -> TOOL:analyze_repo|PATH:/home/user/myproject|ARG:
-- "check health of handlers.user in /home/user/myproject" -> TOOL:module_health|PATH:/home/user/myproject|ARG:handlers.user
-- "I want to add auth, what should I refactor in /tmp/app" -> TOOL:suggest_refactor|PATH:/tmp/app|ARG:add authentication feature
+- "check health of handlers.user in https://github.com/user/repo" -> TOOL:module_health|PATH:https://github.com/user/repo|ARG:handlers.user
+- "I want to add auth, what should I refactor in https://github.com/user/repo" -> TOOL:suggest_refactor|PATH:https://github.com/user/repo|ARG:add authentication feature
 - "check changes to handlers/user.py in /home/user/proj" -> TOOL:check_change|PATH:/home/user/proj|ARG:handlers/user.py
-- "get the dependency graph for /home/user/myproject" -> TOOL:get_metric_graph|PATH:/home/user/myproject|ARG:
+- "get the dependency graph for https://github.com/user/repo" -> TOOL:get_metric_graph|PATH:https://github.com/user/repo|ARG:
 
 If the user's message doesn't clearly map to a tool, or is a general question about architecture, respond with:
-TOOL:analyze_repo|PATH:<best_guess_path>|ARG:
+TOOL:analyze_repo|PATH:<best_guess_path_or_url>|ARG:
 
-If you cannot determine a path at all, respond with:
-HELP:Please provide the absolute path to the Python repo you want to analyze. For example: "analyze /home/user/my-python-project"
+If you cannot determine a path or URL at all, respond with:
+HELP:Please provide a GitHub repo URL or absolute path to analyze. For example: \"analyze https://github.com/pallets/flask\" or \"analyze /home/user/my-project\"
 """
 
 
@@ -113,45 +153,54 @@ def _parse_tool_call(llm_response: str) -> dict:
     }
 
 
-def _run_tool(tool_name: str, path: str, arg: str) -> str:
+def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
     """Execute a KevinKowalski tool and return the Markdown result."""
-    if not path or path in (".", "./"):
+    if not path_or_url or path_or_url in (".", "./"):
         return (
-            "I need an absolute path to the repo to analyze. "
-            "Please provide one, e.g.: 'analyze /home/user/my-python-project'"
+            "I need a GitHub repo URL or absolute path to analyze. "
+            "For example: 'analyze https://github.com/pallets/flask' "
+            "or 'analyze /home/user/my-python-project'"
         )
 
-    path = os.path.abspath(path)
+    tmp_dir = None
+    try:
+        path, tmp_dir = _resolve_repo(path_or_url)
 
-    if tool_name == "analyze_repo":
-        snapshot = analyzer.analyze(path)
-        return format_analyze_repo(snapshot)
+        if tool_name == "analyze_repo":
+            snapshot = analyzer.analyze(path)
+            return format_analyze_repo(snapshot)
 
-    elif tool_name == "module_health":
-        if not arg:
-            return "Please specify a module name, e.g.: 'check health of handlers.user in /path/to/repo'"
-        snapshot = analyzer.analyze(path)
-        return format_module_health(snapshot, arg)
+        elif tool_name == "module_health":
+            if not arg:
+                return "Please specify a module name, e.g.: 'check health of handlers.user in https://github.com/user/repo'"
+            snapshot = analyzer.analyze(path)
+            return format_module_health(snapshot, arg)
 
-    elif tool_name == "suggest_refactor":
-        if not arg:
-            arg = "general improvements"
-        snapshot = analyzer.analyze(path)
-        return format_suggest_refactor(snapshot, arg)
+        elif tool_name == "suggest_refactor":
+            if not arg:
+                arg = "general improvements"
+            snapshot = analyzer.analyze(path)
+            return format_suggest_refactor(snapshot, arg)
 
-    elif tool_name == "check_change":
-        files = [f.strip() for f in arg.split(",") if f.strip()] if arg else []
-        if not files:
-            return "Please specify which files changed, e.g.: 'check changes to handlers/user.py in /path/to/repo'"
-        result = analyzer.incremental_check(path, files)
-        return format_check_change(result)
+        elif tool_name == "check_change":
+            files = [f.strip() for f in arg.split(",") if f.strip()] if arg else []
+            if not files:
+                return "Please specify which files changed, e.g.: 'check changes to handlers/user.py in https://github.com/user/repo'"
+            result = analyzer.incremental_check(path, files)
+            return format_check_change(result)
 
-    elif tool_name == "get_metric_graph":
-        snapshot = analyzer.analyze(path)
-        return format_metric_graph(snapshot)
+        elif tool_name == "get_metric_graph":
+            snapshot = analyzer.analyze(path)
+            return format_metric_graph(snapshot)
 
-    else:
-        return f"Unknown tool: {tool_name}. Available: analyze_repo, module_health, suggest_refactor, check_change, get_metric_graph"
+        else:
+            return f"Unknown tool: {tool_name}. Available: analyze_repo, module_health, suggest_refactor, check_change, get_metric_graph"
+
+    except Exception as e:
+        return f"Failed to process repository: {type(e).__name__}: {e}"
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @protocol.on_message(ChatMessage)
