@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and platform_python_implementation != 'PyPy'",
@@ -1420,6 +1420,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "jedi" },
     { name = "lizard" },
     { name = "matplotlib" },
     { name = "networkx" },
@@ -1439,6 +1440,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.2.4" },
+    { name = "jedi", specifier = ">=0.19.2" },
     { name = "lizard", specifier = ">=1.17.10" },
     { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "networkx", specifier = ">=3.6.1" },

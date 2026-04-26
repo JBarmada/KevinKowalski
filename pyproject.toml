@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=3.2.4",
+    "jedi>=0.19.2",
     "lizard>=1.17.10",
     "matplotlib>=3.10.9",
     "networkx>=3.6.1",
