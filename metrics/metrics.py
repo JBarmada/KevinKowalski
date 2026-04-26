@@ -138,6 +138,10 @@ def _get_function_dependency_graph(root: pathlib.Path) -> nx.DiGraph:
 
 def get_metrics(root: pathlib.Path):
     graph = _get_file_dependency_graph(root)
+    metrics = compute_metrics(graph)
+
+    for node, m in sorted(metrics.items()):
+        print(f"{node}: Ca={m.ca}, Ce={m.ce}, I={m.instability:.2f}")
 
     net = Network(directed=True)
     net.from_nx(graph)
