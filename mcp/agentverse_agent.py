@@ -82,6 +82,7 @@ def _resolve_repo(path_or_url: str) -> tuple[str, str | None]:
     match = _GITHUB_URL_RE.search(path_or_url)
     if match:
         repo_slug = match.group(1)
+        repo_slug = re.sub(r'\.git$', '', repo_slug)
         clone_url = f"https://github.com/{repo_slug}.git"
         tmp_dir = tempfile.mkdtemp(prefix="kowalski_")
         repo_dir = os.path.join(tmp_dir, "repo")
