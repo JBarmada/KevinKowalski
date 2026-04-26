@@ -35,7 +35,7 @@ def format_analyze_repo(snap: GraphSnapshot) -> str:
     flagged.sort(key=lambda m: (-len(m.violations), -m.cc_max))
 
     lines = [
-        f"# Repo analysis — `{snap.root}`",
+        f"## Repo analysis — `{snap.root}`",
         "",
         f"- Modules: **{n_modules}**",
         f"- Internal edges: **{n_edges}**",
@@ -44,7 +44,7 @@ def format_analyze_repo(snap: GraphSnapshot) -> str:
         "",
     ]
     if flagged:
-        lines.append("## Top offenders")
+        lines.append("### Top offenders")
         for m in flagged[:5]:
             lines.append(
                 f"- `{m.module}` — {', '.join(m.violations)} "
@@ -66,7 +66,7 @@ def format_module_health(snap: GraphSnapshot, module: str) -> str:
     importees = [dst for src, dst in snap.edges if src == module]
 
     lines = [
-        f"# Module `{m.module}`",
+        f"## Module `{m.module}`",
         f"- Path: `{m.path}`",
         f"- Afferent (Ca): **{m.ca}**  Efferent (Ce): **{m.ce}**",
         f"- Instability: **{m.instability:.2f}** "
@@ -76,15 +76,15 @@ def format_module_health(snap: GraphSnapshot, module: str) -> str:
         "",
     ]
     if m.violations:
-        lines.append("## Violations")
+        lines.append("### Violations")
         for v in m.violations:
             lines.append(f"- **{v}** — {_violation_explainer(v)}")
         lines.append("")
     if importers:
-        lines.append(f"## Imported by ({len(importers)})")
+        lines.append(f"### Imported by ({len(importers)})")
         lines.append(", ".join(f"`{x}`" for x in importers[:8]))
     if importees:
-        lines.append(f"## Imports ({len(importees)})")
+        lines.append(f"### Imports ({len(importees)})")
         lines.append(", ".join(f"`{x}`" for x in importees[:8]))
     return "\n".join(lines)
 
@@ -103,7 +103,7 @@ def format_suggest_refactor(snap: GraphSnapshot, feature_description: str) -> st
     candidates = [m for m in ranked if m.violations][:3]
 
     lines = [
-        f"# Pre-feature decoupling advice",
+        f"## Pre-feature decoupling advice",
         f"_Feature: {feature_description.strip()[:120]}_",
         "",
     ]
@@ -125,12 +125,12 @@ def format_check_change(check_result: dict) -> str:
     """Before/after delta with green/yellow/red verdict."""
     verdict = check_result.get("verdict", "unknown")
     tag = {"green": "[OK]", "yellow": "[WARN]", "red": "[FAIL]"}.get(verdict, "[?]")
-    lines = [f"# Change check: {tag} **{verdict.upper()}**", ""]
+    lines = [f"## Change check: {tag} **{verdict.upper()}**", ""]
 
     for change in check_result.get("changed", []):
         before: ModuleMetrics = change["before"]
         after: ModuleMetrics = change["after"]
-        lines.append(f"## `{change['module']}`")
+        lines.append(f"### `{change['module']}`")
         lines.append(
             f"- Instability: {before.instability:.2f} -> **{after.instability:.2f}**"
         )
