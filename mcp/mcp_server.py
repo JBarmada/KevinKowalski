@@ -2,8 +2,8 @@
 
 Exposes tools that let an AI coding agent query architectural metrics
 about a Python repo before/while making changes. Built against the
-Analyzer protocol in contract.py; today backed by fake_analyzer, later
-swapped for the real one with a one-line import change.
+Analyzer protocol in contract.py; backed by real_analyzer which
+performs actual AST-based static analysis of the target repo.
 
 CRITICAL: This process speaks JSON-RPC over stdout. Anything that prints
 to stdout corrupts the protocol stream. All logging goes to stderr.

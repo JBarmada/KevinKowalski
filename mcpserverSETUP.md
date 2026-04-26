@@ -39,13 +39,13 @@ pip install networkx radon lizard
 
 ## Step 3 — Verify the install
 
-Run the test suite — all 30 should pass:
+Run the test suite:
 
 ```bash
 uv run pytest mcp/tests
 ```
 
-Expected output ends with `30 passed`.
+All tests should pass.
 
 ## Step 4 — Find the absolute path to your Python interpreter
 
@@ -104,7 +104,7 @@ Ask the agent:
 List your MCP tools.
 ```
 
-You should see five tools prefixed `kowalski-kevin__`:
+You should see six tools prefixed `kowalski-kevin__`:
 
 | Tool | What it does |
 |---|---|
@@ -112,7 +112,8 @@ You should see five tools prefixed `kowalski-kevin__`:
 | `module_health` | Per-module card |
 | `suggest_refactor` | Pre-feature decoupling advice |
 | `check_change` | Before/after delta after edits |
-| `get_metric_graph` | Raw JSON nodes + edges |
+| `refactor_assistance` | Ca/Ce-focused refactor brief at package, file, and function levels |
+| `generate_graph` | Interactive HTML dependency graph with three views |
 
 ## Example — using it inside a Claude agent
 
