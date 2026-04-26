@@ -148,25 +148,28 @@ def format_check_change(check_result: dict) -> str:
     return "\n".join(lines)
 
 
-def format_metric_graph(snap: GraphSnapshot) -> str:
-    """JSON node/edge dump — same shape the visualization will consume."""
-    payload = {
-        "root": snap.root,
-        "nodes": [
-            {
-                "id": m.module,
-                "path": m.path,
-                "metrics": {
-                    "ca": m.ca,
-                    "ce": m.ce,
-                    "instability": m.instability,
-                    "lcom4": m.lcom4,
-                    "cc_max": m.cc_max,
-                },
-                "violations": m.violations,
-            }
-            for m in snap.modules.values()
-        ],
-        "edges": [{"from": s, "to": d} for s, d in snap.edges],
-    }
-    return json.dumps(payload, indent=2)
+def format_generate_graph(result: dict) -> str:
+    """Format the result of interactive graph generation."""
+    lines = [
+        f"## Dependency Graph Generated",
+        "",
+        f"- **Output:** `{result['output_path']}`",
+        f"- **File-level:** {result['file_nodes']} nodes, {result['file_edges']} edges",
+        f"- **Package-level:** {result['package_nodes']} nodes, {result['package_edges']} edges",
+        f"- **Function-level:** {result['function_nodes']} nodes, {result['function_edges']} edges",
+        "",
+    ]
+    if result.get("file_cycle_count", 0) > 0:
+        lines.append(f"**Cycles detected:** {result['file_cycle_count']} nodes involved in cycles")
+
+    high_impact = result.get("high_impact_count", 0)
+    high_suscept = result.get("high_susceptibility_count", 0)
+    if high_impact > 0:
+        lines.append(f"**High impact modules (>0.7):** {high_impact}")
+    if high_suscept > 0:
+        lines.append(f"**High susceptibility modules (>0.7):** {high_suscept}")
+
+    if not result.get("file_cycle_count") and not high_impact and not high_suscept:
+        lines.append("No architectural concerns detected.")
+
+    return "\n".join(lines)

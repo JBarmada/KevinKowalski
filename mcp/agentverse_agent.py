@@ -61,7 +61,7 @@ from real_analyzer import get_analyzer
 from formatters import (
     format_analyze_repo,
     format_check_change,
-    format_metric_graph,
+    format_generate_graph,
     format_module_health,
     format_suggest_refactor,
 )
