@@ -16,3 +16,6 @@ explorer.html
 .DS_Store
 .vscode/
 .idea/
+
+# Output
+output/

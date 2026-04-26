@@ -21,7 +21,7 @@ def parse_edges(source_root: Path) -> list[tuple[str, str]]:
 
     for filepath in sorted(source_root.rglob("*.py")):
         module_name = _module_name(filepath, source_root)
-        tree = ast.parse(filepath.read_text())
+        tree = ast.parse(filepath.read_text(encoding="utf-8"))
 
         for node in ast.walk(tree):
             # NOTE: [pedagogical] ast.ImportFrom covers both `from . import x` and
@@ -95,7 +95,7 @@ def parse_edges_v2(source_root: Path) -> list[tuple[str, str]]:
 
     for filepath in sorted(source_root.rglob("*.py")):
         module_name = _module_name(filepath, source_root)
-        tree = ast.parse(filepath.read_text())
+        tree = ast.parse(filepath.read_text(encoding="utf-8"))
         type_checking_ids = _type_checking_imports(tree)
 
         for node in ast.walk(tree):
@@ -190,11 +190,13 @@ nx.draw_networkx(
 for cycle in nx.simple_cycles(graph):
     print(cycle)
 
-plt.title("Flask internal import graph  (A → B means A imports from B)")
+folder_name = source_root.name
+plt.title(f"{folder_name} internal import graph  (A → B means A imports from B)")
 plt.axis("off")
 plt.tight_layout()
 
-output_path = Path("flask_imports.png")
+output_path = Path(f"output/{folder_name}_imports.png")
+output_path.parent.mkdir(parents=True, exist_ok=True)
 plt.savefig(output_path, dpi=150, bbox_inches="tight")
 print(f"Saved to {output_path}")
 plt.show()
