@@ -61,12 +61,33 @@ client = OpenAI(
 
 analyzer = get_analyzer()
 
+# Conversation memory: persisted via ctx.storage (KeyValueStore on disk).
+# Verified API: get/has/set/remove/clear; values are JSON-serialized.
+# We cap total stored turns per sender to bound prompt size and cost.
+_HISTORY_LIMIT = 10  # combined user + assistant turns
+_ROUTER_MODEL = "asi1"
+_SUMMARIZER_MODEL = "asi1-ultra"
+
+
+def _history_key(sender: str) -> str:
+    return f"history:{sender}"
+
+
+def _load_history(ctx: "Context", sender: str) -> list[dict]:
+    raw = ctx.storage.get(_history_key(sender))
+    return raw if isinstance(raw, list) else []
+
+
+def _save_history(ctx: "Context", sender: str, history: list[dict]) -> None:
+    ctx.storage.set(_history_key(sender), history[-_HISTORY_LIMIT:])
+
 agent = Agent(
     name="KevinKowalski",
     seed=os.environ.get("AGENT_SEED", "kevin-kowalski-arch-agent-seed-phrase-2026"),
     port=8001,
     mailbox=True,
     publish_agent_details=True,
+    network="testnet",  # use testnet Almanac contract; auto-funded, no FET needed
 )
 
 protocol = Protocol(spec=chat_protocol_spec)
@@ -135,7 +156,7 @@ HELP:Please provide a GitHub repo URL or absolute path to analyze. For example: 
 
 
 def _parse_tool_call(llm_response: str) -> dict:
-    """Parse the LLM's structured tool-call response."""
+    """Parse the LLM's structured tool-call response into a dict."""
     line = llm_response.strip().splitlines()[0].strip()
 
     if line.startswith("HELP:"):
@@ -152,6 +173,67 @@ def _parse_tool_call(llm_response: str) -> dict:
         "path": parts.get("PATH", ""),
         "arg": parts.get("ARG", ""),
     }
+
+
+def _route(user_text: str, history: list[dict]) -> dict:
+    """First pass: cheap router model picks which tool to call.
+
+    Sees prior conversation history so follow-ups like 'now check db.session'
+    can resolve the implicit repo path from earlier turns.
+    """
+    messages = [{"role": "system", "content": TOOL_DESCRIPTIONS}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_text})
+    r = client.chat.completions.create(
+        model=_ROUTER_MODEL,
+        messages=messages,
+        max_tokens=128,
+    )
+    raw = str(r.choices[0].message.content)
+    return _parse_tool_call(raw)
+
+
+_SUMMARIZER_SYSTEM = """You are KevinKowalski, an architectural analysis assistant.
+
+The tool you just called returned a Markdown analysis. Your job: write a SHORT
+conversational summary (2-4 sentences) that:
+- Highlights the single most important finding
+- Suggests one concrete next step the user could take
+- Does NOT repeat the raw metrics verbatim -- the user will see the full
+  analysis below your summary, separated by a horizontal rule.
+
+If the tool output is an error or a "not found" message, briefly explain what
+went wrong and suggest how to fix the call (e.g. provide a GitHub URL, specify
+a module name).
+
+Be direct and useful. No preamble, no "Here is a summary:", just the summary."""
+
+
+def _summarize(
+    user_text: str, tool_name: str, raw_output: str, history: list[dict]
+) -> str:
+    """Second pass: bigger model writes a natural-language take on the tool result."""
+    messages = [{"role": "system", "content": _SUMMARIZER_SYSTEM}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_text})
+    messages.append(
+        {
+            "role": "assistant",
+            "content": f"[Called tool `{tool_name}`. Output below.]\n\n{raw_output}",
+        }
+    )
+    messages.append(
+        {
+            "role": "user",
+            "content": "Now write your short summary as instructed.",
+        }
+    )
+    r = client.chat.completions.create(
+        model=_SUMMARIZER_MODEL,
+        messages=messages,
+        max_tokens=600,
+    )
+    return str(r.choices[0].message.content).strip()
 
 
 def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
@@ -221,26 +303,39 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
     if not text.strip():
         response_text = "Please send a message describing what you'd like to analyze."
     else:
+        history = _load_history(ctx, sender)
         try:
-            r = client.chat.completions.create(
-                model="asi1",
-                messages=[
-                    {"role": "system", "content": TOOL_DESCRIPTIONS},
-                    {"role": "user", "content": text},
-                ],
-                max_tokens=256,
-            )
-            llm_output = str(r.choices[0].message.content)
-            ctx.logger.info(f"LLM routing: {llm_output}")
-
-            parsed = _parse_tool_call(llm_output)
+            # Pass 1: route to a tool (uses history so follow-ups resolve correctly)
+            parsed = _route(text, history)
+            ctx.logger.info(f"Routed to: {parsed}")
 
             if parsed["tool"] == "help":
                 response_text = parsed["message"]
             else:
-                response_text = _run_tool(
-                    parsed["tool"], parsed["path"], parsed["arg"]
-                )
+                # Run the tool (raw Markdown)
+                raw = _run_tool(parsed["tool"], parsed["path"], parsed["arg"])
+
+                # Pass 2: bigger model summarizes for the user
+                try:
+                    summary = _summarize(text, parsed["tool"], raw, history)
+                    response_text = f"{summary}\n\n---\n\n{raw}"
+                except Exception as e:
+                    # If summarizer fails, still return the raw tool output --
+                    # better to ship the data than nothing.
+                    ctx.logger.exception("Summarizer failed; returning raw output")
+                    response_text = raw
+
+            # Update history with the user's turn and a compact assistant turn.
+            # Store only the summary (not the raw Markdown) to keep prompts small.
+            assistant_record = (
+                response_text.split("\n\n---\n\n", 1)[0]
+                if "\n\n---\n\n" in response_text
+                else response_text
+            )
+            history.append({"role": "user", "content": text})
+            history.append({"role": "assistant", "content": assistant_record})
+            _save_history(ctx, sender, history)
+
         except Exception as e:
             ctx.logger.exception("Error processing message")
             response_text = f"Sorry, I encountered an error: {type(e).__name__}: {e}"
