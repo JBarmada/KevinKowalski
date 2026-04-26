@@ -17,6 +17,20 @@ class NodeMetrics(BaseModel, frozen=True):
     instability: float  # ce / (ca + ce); 0 = maximally stable, 1 = maximally unstable
 
 
+def compute_metrics(graph: nx.DiGraph) -> dict[str, NodeMetrics]:
+    """Compute Ca, Ce, and instability for every node in a dependency graph."""
+    metrics = {}
+    for node in graph.nodes():
+        ca = graph.in_degree(node)
+        ce = graph.out_degree(node)
+        # NOTE: [pedagogical] isolated nodes (no edges at all) get instability 0.5
+        # — they are neither stable nor unstable, so we default to the midpoint
+        # rather than dividing by zero.
+        instability = ce / (ca + ce) if (ca + ce) > 0 else 0.5
+        metrics[node] = NodeMetrics(ca=ca, ce=ce, instability=instability)
+    return metrics
+
+
 def node_id(name: str, module_path: pathlib.Path, line: int) -> str:
     """Return a unique string identifier for a function definition."""
     # NOTE: [thought process] dots and colons in node IDs confuse pyvis's edge
