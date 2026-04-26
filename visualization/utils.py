@@ -41,6 +41,8 @@ class NodeMetrics:
     instability: float  # Ce / (Ca + Ce): 0=stable, 1=unstable
     impact: float  # Normalized transitive dependents count [0,1]
     susceptibility: float  # Normalized transitive dependencies count [0,1]
+    raw_impact: float = 0.0  # Denormalized impact value
+    raw_susceptibility: float = 0.0  # Denormalized susceptibility value
 
 
 class _ImportVisitor(ast.NodeVisitor):
@@ -272,6 +274,8 @@ def compute_metrics(
             instability=instability,
             impact=raw_impact[node] / max_impact,
             susceptibility=raw_susceptibility[node] / max_susceptibility,
+            raw_impact=raw_impact[node],
+            raw_susceptibility=raw_susceptibility[node],
         )
     return metrics
 
@@ -300,6 +304,34 @@ def truncate_label(name: str, max_chars: int = 18) -> str:
     if len(name) <= max_chars:
         return name
     return name[: max_chars - 3] + "..."
+
+
+def format_multiline_label(name: str, max_name_len: int = 18) -> str:
+    """Format a module name as 2 rows for readability.
+
+    Row 1: unique file/function name (truncated if needed)
+    Row 2: parent module path (smaller)
+
+    'flask.json.provider' -> 'provider\\nflask.json'
+    'utils' -> 'utils'
+    """
+    parts = name.split(".")
+    if len(parts) == 1:
+        display_name = parts[0]
+        if len(display_name) > max_name_len:
+            display_name = display_name[: max_name_len - 2] + ".."
+        return display_name
+
+    unique_name = parts[-1]
+    module_path = ".".join(parts[:-1])
+
+    if len(unique_name) > max_name_len:
+        unique_name = unique_name[: max_name_len - 2] + ".."
+
+    if len(module_path) > max_name_len:
+        module_path = ".." + module_path[-(max_name_len - 2):]
+
+    return f"{unique_name}\\n{module_path}"
 
 
 def shorten_label(name: str, max_parts: int = 2) -> str:

@@ -9,7 +9,7 @@ import matplotlib.colors as mcolors
 import networkx as nx
 from pyvis.network import Network
 
-from visualization.utils import NodeMetrics, truncate_label
+from visualization.utils import NodeMetrics, truncate_label, format_multiline_label
 
 
 def holistic_color(impact: float) -> str:
@@ -26,9 +26,9 @@ def holistic_color(impact: float) -> str:
 
 
 def susceptibility_color(value: float) -> str:
-    """Map susceptibility [0,1] — bright cyan (low) to vivid magenta (high)."""
-    low = (0.40, 0.80, 1.0)   # bright cyan
-    high = (0.90, 0.20, 0.90)  # vivid magenta
+    """Map susceptibility [0,1] — white (low) to saturated blue (high)."""
+    low = (1.0, 1.0, 1.0)     # white
+    high = (0.0, 0.45, 1.0)   # saturated bright blue
     r = low[0] + (high[0] - low[0]) * value
     g = low[1] + (high[1] - low[1]) * value
     b = low[2] + (high[2] - low[2]) * value
@@ -36,22 +36,30 @@ def susceptibility_color(value: float) -> str:
 
 
 def impact_toggle_color(value: float) -> str:
-    """Map impact [0,1] — bright yellow (low) to vivid red-orange (high)."""
-    low = (1.0, 0.95, 0.30)   # bright yellow
-    high = (1.0, 0.25, 0.05)  # vivid red-orange
+    """Map impact [0,1] — white (low) to saturated orange (high)."""
+    low = (1.0, 1.0, 1.0)     # white
+    high = (1.0, 0.45, 0.0)   # saturated bright orange
     r = low[0] + (high[0] - low[0]) * value
     g = low[1] + (high[1] - low[1]) * value
     b = low[2] + (high[2] - low[2]) * value
     return mcolors.to_hex((r, g, b))
 
 
-def _build_tooltip(node: str, metrics: NodeMetrics, file_path: str | None = None) -> str:
-    """Build plain-text tooltip content for a node."""
+def _build_tooltip(
+    node: str,
+    metrics: NodeMetrics,
+    file_path: str | None = None,
+    raw_impact: float | None = None,
+    raw_susceptibility: float | None = None,
+) -> str:
+    """Build plain-text tooltip content for a node with denormalized metrics."""
+    impact_val = raw_impact if raw_impact is not None else metrics.impact
+    suscept_val = raw_susceptibility if raw_susceptibility is not None else metrics.susceptibility
     lines = [
         node,
         "─" * min(len(node), 30),
-        f"Impact: {metrics.impact:.2f}",
-        f"Susceptibility: {metrics.susceptibility:.2f}",
+        f"Impact: {impact_val:.1f}",
+        f"Susceptibility: {suscept_val:.1f}",
         "",
         f"Ca (dependents): {metrics.ca}",
         f"Ce (dependencies): {metrics.ce}",
@@ -125,7 +133,7 @@ def _get_orbital_vis_options() -> dict:
         "edges": {
             "arrows": {"to": {"enabled": True, "scaleFactor": 0.5}},
             "smooth": {"type": "continuous", "roundness": 0.2},
-            "color": {"color": "#555555", "opacity": 0.6},
+            "color": {"color": "#999999", "opacity": 0.7},
         },
         "layout": {"hierarchical": {"enabled": False}},
         "physics": {
@@ -164,7 +172,14 @@ def _inject_enhancements(
     metrics_json = json.dumps(
         {
             view: {
-                node: {"impact": m.impact, "susceptibility": m.susceptibility, "ca": m.ca, "ce": m.ce}
+                node: {
+                    "impact": m.impact,
+                    "susceptibility": m.susceptibility,
+                    "ca": m.ca,
+                    "ce": m.ce,
+                    "raw_impact": m.raw_impact,
+                    "raw_susceptibility": m.raw_susceptibility,
+                }
                 for node, m in mets.items()
             }
             for view, mets in all_metrics.items()
@@ -221,10 +236,10 @@ def _inject_enhancements(
     <button id="btn-default-color" onclick="setColorMode('default')" style="padding: 6px 10px; background: linear-gradient(to right, #4de64d, #d9731a); border: 1px solid #555; color: #fff; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; text-align: left;">
       Holistic
     </button>
-    <button id="btn-susceptibility" onclick="setColorMode('susceptibility')" style="padding: 6px 10px; background: linear-gradient(to right, #66ccff, #e633e6); border: 1px solid #555; color: #fff; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; text-align: left;">
+    <button id="btn-susceptibility" onclick="setColorMode('susceptibility')" style="padding: 6px 10px; background: linear-gradient(to right, #ffffff, #0073ff); border: 1px solid #555; color: #333; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; text-align: left;">
       Susceptibility
     </button>
-    <button id="btn-impact" onclick="setColorMode('impact')" style="padding: 6px 10px; background: linear-gradient(to right, #fff24d, #ff400d); border: 1px solid #555; color: #fff; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; text-align: left;">
+    <button id="btn-impact" onclick="setColorMode('impact')" style="padding: 6px 10px; background: linear-gradient(to right, #ffffff, #ff7300); border: 1px solid #555; color: #333; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; text-align: left;">
       Impact
     </button>
     <button id="btn-cycles" onclick="setColorMode('cycles')" style="padding: 6px 10px; background: #3a1a1a; border: 1px solid #e44; color: #f88; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; text-align: left;">
@@ -239,8 +254,19 @@ def _inject_enhancements(
   </div>
 
   <div style="font-size: 10px; color: #888; border-top: 1px solid #444; padding-top: 10px;">
+    <div style="font-weight: 600; margin-bottom: 6px; color: #999;">Legend</div>
+    <div style="display: flex; align-items: center; gap: 6px; margin: 4px 0;">
+      <span style="display: inline-block; width: 20px; height: 2px; background: #999;"></span>
+      <span>Static import</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px; margin: 4px 0;">
+      <span style="display: inline-block; width: 20px; border-top: 2px dashed #999;"></span>
+      <span>Dynamic import</span>
+    </div>
+  </div>
+  <div style="font-size: 10px; color: #888; border-top: 1px solid #444; padding-top: 10px; margin-top: 8px;">
     <div style="font-weight: 600; margin-bottom: 6px; color: #999;">Controls</div>
-    <div style="margin: 3px 0;">Click node → highlight neighbors in yellow</div>
+    <div style="margin: 3px 0;">Click node → highlight neighbors</div>
     <div style="margin: 3px 0;">Ctrl+Click → open in VS Code</div>
     <div style="margin: 3px 0;">Hover → show full name &amp; metrics</div>
   </div>
@@ -274,8 +300,8 @@ def _inject_enhancements(
     }}
 
     function susceptibilityColor(val) {{
-        var low = [0.40, 0.80, 1.0];
-        var high = [0.90, 0.20, 0.90];
+        var low = [1.0, 1.0, 1.0];
+        var high = [0.0, 0.45, 1.0];
         var r = lerp(low[0], high[0], val);
         var g = lerp(low[1], high[1], val);
         var b = lerp(low[2], high[2], val);
@@ -283,8 +309,8 @@ def _inject_enhancements(
     }}
 
     function impactColor(val) {{
-        var low = [1.0, 0.95, 0.30];
-        var high = [1.0, 0.25, 0.05];
+        var low = [1.0, 1.0, 1.0];
+        var high = [1.0, 0.45, 0.0];
         var r = lerp(low[0], high[0], val);
         var g = lerp(low[1], high[1], val);
         var b = lerp(low[2], high[2], val);
@@ -336,7 +362,7 @@ def _inject_enhancements(
             newEdges.push({{
                 from: e.from,
                 to: e.to,
-                color: {{ color: e.color || '#555555', opacity: 0.6 }},
+                color: {{ color: e.color || '#999999', opacity: 0.7 }},
                 width: e.width || 1,
                 dashes: e.dashes || false,
                 arrows: 'to',
@@ -443,7 +469,7 @@ def _inject_enhancements(
         edges.forEach(function(e) {{
             edges.update({{
                 id: e.id,
-                color: {{ color: '#555555', opacity: 0.6 }},
+                color: {{ color: '#999999', opacity: 0.7 }},
                 width: 1
             }});
         }});
@@ -463,15 +489,21 @@ def _inject_enhancements(
         var connectedEdges = new Set(network.getConnectedEdges(nodeId));
 
         nodes.forEach(function(n) {{
+            var nodeColor = getNodeColor(n.id, currentColorMode);
             if (n.id === nodeId) {{
-                var origColor = getNodeColor(n.id, currentColorMode);
                 nodes.update({{
                     id: n.id,
                     borderWidth: 4,
-                    color: {{ background: origColor, border: '#FFD700', highlight: {{ background: origColor, border: '#FFD700' }}, hover: {{ background: origColor, border: '#FFD700' }} }}
+                    color: {{ background: nodeColor, border: '#FFD700', highlight: {{ background: nodeColor, border: '#FFD700' }}, hover: {{ background: nodeColor, border: '#FFD700' }} }}
                 }});
             }} else if (connectedNodes.has(n.id)) {{
-                // neighbors keep their colors
+                // neighbors keep current view's color palette
+                nodes.update({{
+                    id: n.id,
+                    color: {{ background: nodeColor, border: nodeColor, highlight: {{ background: nodeColor, border: '#FFD700' }}, hover: {{ background: nodeColor, border: '#FFD700' }} }},
+                    font: {{ color: '#ddd' }},
+                    borderWidth: 1
+                }});
             }} else {{
                 nodes.update({{
                     id: n.id,
@@ -563,14 +595,20 @@ def _build_graph_json(
         color_hex = holistic_color(m.impact)
         size = 10 + m.impact * 35
 
-        label = truncate_label(node)
+        label = format_multiline_label(node)
         if function_metadata and node in function_metadata:
             meta = function_metadata[node]
-            display_name = f"{meta['file_path']}:{meta['label']}"
-            label = truncate_label(display_name)
-            tooltip = _build_tooltip(display_name, m, meta["file_path"])
+            display_name = f"{meta['label']}\\n{meta['file_path']}"
+            label = display_name
+            tooltip = _build_tooltip(
+                f"{meta['file_path']}:{meta['label']}", m, meta["file_path"],
+                raw_impact=m.raw_impact, raw_susceptibility=m.raw_susceptibility
+            )
         else:
-            tooltip = _build_tooltip(node, m)
+            tooltip = _build_tooltip(
+                node, m,
+                raw_impact=m.raw_impact, raw_susceptibility=m.raw_susceptibility
+            )
 
         node_data: dict = {
             "id": node,
@@ -589,7 +627,7 @@ def _build_graph_json(
         is_dynamic = edge_types.get((src, dst), False) if edge_types else False
         is_cycle_edge = (src, dst) in cycle_edges
 
-        edge_color = "#ff4444" if is_cycle_edge else "#555555"
+        edge_color = "#ff4444" if is_cycle_edge else "#999999"
         edge_width = 1.5 if is_cycle_edge else 1
 
         edges_json.append({
