@@ -1,0 +1,444 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script>function neighbourhoodHighlight(params) {
+  // console.log("in nieghbourhoodhighlight");
+  allNodes = nodes.get({ returnType: "Object" });
+  // originalNodes = JSON.parse(JSON.stringify(allNodes));
+  // if something is selected:
+  if (params.nodes.length > 0) {
+    highlightActive = true;
+    var i, j;
+    var selectedNode = params.nodes[0];
+    var degrees = 2;
+
+    // mark all nodes as hard to read.
+    for (let nodeId in allNodes) {
+      // nodeColors[nodeId] = allNodes[nodeId].color;
+      allNodes[nodeId].color = "rgba(200,200,200,0.5)";
+      if (allNodes[nodeId].hiddenLabel === undefined) {
+        allNodes[nodeId].hiddenLabel = allNodes[nodeId].label;
+        allNodes[nodeId].label = undefined;
+      }
+    }
+    var connectedNodes = network.getConnectedNodes(selectedNode);
+    var allConnectedNodes = [];
+
+    // get the second degree nodes
+    for (i = 1; i < degrees; i++) {
+      for (j = 0; j < connectedNodes.length; j++) {
+        allConnectedNodes = allConnectedNodes.concat(
+          network.getConnectedNodes(connectedNodes[j])
+        );
+      }
+    }
+
+    // all second degree nodes get a different color and their label back
+    for (i = 0; i < allConnectedNodes.length; i++) {
+      // allNodes[allConnectedNodes[i]].color = "pink";
+      allNodes[allConnectedNodes[i]].color = "rgba(150,150,150,0.75)";
+      if (allNodes[allConnectedNodes[i]].hiddenLabel !== undefined) {
+        allNodes[allConnectedNodes[i]].label =
+          allNodes[allConnectedNodes[i]].hiddenLabel;
+        allNodes[allConnectedNodes[i]].hiddenLabel = undefined;
+      }
+    }
+
+    // all first degree nodes get their own color and their label back
+    for (i = 0; i < connectedNodes.length; i++) {
+      // allNodes[connectedNodes[i]].color = undefined;
+      allNodes[connectedNodes[i]].color = nodeColors[connectedNodes[i]];
+      if (allNodes[connectedNodes[i]].hiddenLabel !== undefined) {
+        allNodes[connectedNodes[i]].label =
+          allNodes[connectedNodes[i]].hiddenLabel;
+        allNodes[connectedNodes[i]].hiddenLabel = undefined;
+      }
+    }
+
+    // the main node gets its own color and its label back.
+    // allNodes[selectedNode].color = undefined;
+    allNodes[selectedNode].color = nodeColors[selectedNode];
+    if (allNodes[selectedNode].hiddenLabel !== undefined) {
+      allNodes[selectedNode].label = allNodes[selectedNode].hiddenLabel;
+      allNodes[selectedNode].hiddenLabel = undefined;
+    }
+  } else if (highlightActive === true) {
+    // console.log("highlightActive was true");
+    // reset all nodes
+    for (let nodeId in allNodes) {
+      // allNodes[nodeId].color = "purple";
+      allNodes[nodeId].color = nodeColors[nodeId];
+      // delete allNodes[nodeId].color;
+      if (allNodes[nodeId].hiddenLabel !== undefined) {
+        allNodes[nodeId].label = allNodes[nodeId].hiddenLabel;
+        allNodes[nodeId].hiddenLabel = undefined;
+      }
+    }
+    highlightActive = false;
+  }
+
+  // transform the object into an array
+  var updateArray = [];
+  if (params.nodes.length > 0) {
+    for (let nodeId in allNodes) {
+      if (allNodes.hasOwnProperty(nodeId)) {
+        // console.log(allNodes[nodeId]);
+        updateArray.push(allNodes[nodeId]);
+      }
+    }
+    nodes.update(updateArray);
+  } else {
+    // console.log("Nothing was selected");
+    for (let nodeId in allNodes) {
+      if (allNodes.hasOwnProperty(nodeId)) {
+        // console.log(allNodes[nodeId]);
+        // allNodes[nodeId].color = {};
+        updateArray.push(allNodes[nodeId]);
+      }
+    }
+    nodes.update(updateArray);
+  }
+}
+
+function filterHighlight(params) {
+  allNodes = nodes.get({ returnType: "Object" });
+  // if something is selected:
+  if (params.nodes.length > 0) {
+    filterActive = true;
+    let selectedNodes = params.nodes;
+
+    // hiding all nodes and saving the label
+    for (let nodeId in allNodes) {
+      allNodes[nodeId].hidden = true;
+      if (allNodes[nodeId].savedLabel === undefined) {
+        allNodes[nodeId].savedLabel = allNodes[nodeId].label;
+        allNodes[nodeId].label = undefined;
+      }
+    }
+
+    for (let i=0; i < selectedNodes.length; i++) {
+      allNodes[selectedNodes[i]].hidden = false;
+      if (allNodes[selectedNodes[i]].savedLabel !== undefined) {
+        allNodes[selectedNodes[i]].label = allNodes[selectedNodes[i]].savedLabel;
+        allNodes[selectedNodes[i]].savedLabel = undefined;
+      }
+    }
+
+  } else if (filterActive === true) {
+    // reset all nodes
+    for (let nodeId in allNodes) {
+      allNodes[nodeId].hidden = false;
+      if (allNodes[nodeId].savedLabel !== undefined) {
+        allNodes[nodeId].label = allNodes[nodeId].savedLabel;
+        allNodes[nodeId].savedLabel = undefined;
+      }
+    }
+    filterActive = false;
+  }
+
+  // transform the object into an array
+  var updateArray = [];
+  if (params.nodes.length > 0) {
+    for (let nodeId in allNodes) {
+      if (allNodes.hasOwnProperty(nodeId)) {
+        updateArray.push(allNodes[nodeId]);
+      }
+    }
+    nodes.update(updateArray);
+  } else {
+    for (let nodeId in allNodes) {
+      if (allNodes.hasOwnProperty(nodeId)) {
+        updateArray.push(allNodes[nodeId]);
+      }
+    }
+    nodes.update(updateArray);
+  }
+}
+
+function selectNode(nodes) {
+  network.selectNodes(nodes);
+  neighbourhoodHighlight({ nodes: nodes });
+  return nodes;
+}
+
+function selectNodes(nodes) {
+  network.selectNodes(nodes);
+  filterHighlight({nodes: nodes});
+  return nodes;
+}
+
+function highlightFilter(filter) {
+  let selectedNodes = []
+  let selectedProp = filter['property']
+  if (filter['item'] === 'node') {
+    let allNodes = nodes.get({ returnType: "Object" });
+    for (let nodeId in allNodes) {
+      if (allNodes[nodeId][selectedProp] && filter['value'].includes((allNodes[nodeId][selectedProp]).toString())) {
+        selectedNodes.push(nodeId)
+      }
+    }
+  }
+  else if (filter['item'] === 'edge'){
+    let allEdges = edges.get({returnType: 'object'});
+    // check if the selected property exists for selected edge and select the nodes connected to the edge
+    for (let edge in allEdges) {
+      if (allEdges[edge][selectedProp] && filter['value'].includes((allEdges[edge][selectedProp]).toString())) {
+        selectedNodes.push(allEdges[edge]['from'])
+        selectedNodes.push(allEdges[edge]['to'])
+      }
+    }
+  }
+  selectNodes(selectedNodes)
+}</script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+            
+            
+            
+            
+            
+
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 100%;
+                 height: 100vh;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+             #loadingBar {
+                 position:absolute;
+                 top:0px;
+                 left:0px;
+                 width: 100%;
+                 height: 100vh;
+                 background-color:rgba(200,200,200,0.8);
+                 -webkit-transition: all 0.5s ease;
+                 -moz-transition: all 0.5s ease;
+                 -ms-transition: all 0.5s ease;
+                 -o-transition: all 0.5s ease;
+                 transition: all 0.5s ease;
+                 opacity:1;
+             }
+
+             #bar {
+                 position:absolute;
+                 top:0px;
+                 left:0px;
+                 width:20px;
+                 height:20px;
+                 margin:auto auto auto auto;
+                 border-radius:11px;
+                 border:2px solid rgba(30,30,30,0.05);
+                 background: rgb(0, 173, 246); /* Old browsers */
+                 box-shadow: 2px 0px 4px rgba(0,0,0,0.4);
+             }
+
+             #border {
+                 position:absolute;
+                 top:10px;
+                 left:10px;
+                 width:500px;
+                 height:23px;
+                 margin:auto auto auto auto;
+                 box-shadow: 0px 0px 4px rgba(0,0,0,0.2);
+                 border-radius:10px;
+             }
+
+             #text {
+                 position:absolute;
+                 top:8px;
+                 left:530px;
+                 width:30px;
+                 height:50px;
+                 margin:auto auto auto auto;
+                 font-size:22px;
+                 color: #000000;
+             }
+
+             div.outerBorder {
+                 position:relative;
+                 top:400px;
+                 width:600px;
+                 height:44px;
+                 margin:auto auto auto auto;
+                 border:8px solid rgba(0,0,0,0.1);
+                 background: rgb(252,252,252); /* Old browsers */
+                 background: -moz-linear-gradient(top,  rgba(252,252,252,1) 0%, rgba(237,237,237,1) 100%); /* FF3.6+ */
+                 background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,rgba(252,252,252,1)), color-stop(100%,rgba(237,237,237,1))); /* Chrome,Safari4+ */
+                 background: -webkit-linear-gradient(top,  rgba(252,252,252,1) 0%,rgba(237,237,237,1) 100%); /* Chrome10+,Safari5.1+ */
+                 background: -o-linear-gradient(top,  rgba(252,252,252,1) 0%,rgba(237,237,237,1) 100%); /* Opera 11.10+ */
+                 background: -ms-linear-gradient(top,  rgba(252,252,252,1) 0%,rgba(237,237,237,1) 100%); /* IE10+ */
+                 background: linear-gradient(to bottom,  rgba(252,252,252,1) 0%,rgba(237,237,237,1) 100%); /* W3C */
+                 filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#fcfcfc', endColorstr='#ededed',GradientType=0 ); /* IE6-9 */
+                 border-radius:72px;
+                 box-shadow: 0px 0px 10px rgba(0,0,0,0.2);
+             }
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+            <div id="loadingBar">
+              <div class="outerBorder">
+                <div id="text">0%</div>
+                <div id="border">
+                  <div id="bar"></div>
+                </div>
+              </div>
+            </div>
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#97c2fc", "id": "run____module_scope____0", "label": "\u003cmodule\u003e", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__show_start_screen__262", "label": "show_start_screen", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__new__53", "label": "new", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__show_go_screen__336", "label": "show_go_screen", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__draw_text__28", "label": "draw_text", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__show_character_select__193", "label": "show_character_select", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__show_shop_screen__299", "label": "show_shop_screen", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game___place_teleport_pairs__77", "label": "_place_teleport_pairs", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__run__175", "label": "run", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__wait_for_key__365", "label": "wait_for_key", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____11", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__setup_image__32", "label": "setup_image", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__update__65", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies___apply_kb_movement__23", "label": "_apply_kb_movement", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____74", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____85", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____96", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__update__107", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____120", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__update__130", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____142", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__update__157", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____211", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__update__224", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____251", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__update__291", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game____init____15", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__load_data__25", "label": "load_data", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__save_data__44", "label": "save_data", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__events__193", "label": "events", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__draw__313", "label": "draw", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__update__207", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__select_upgrade__170", "label": "select_upgrade", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "level__get_current_zone__14", "label": "get_current_zone", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__draw_floor_grid__333", "label": "draw_floor_grid", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__draw_level_up__173", "label": "draw_level_up", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__draw_hud__35", "label": "draw_hud", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "level__update__22", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__cleanup_sprites__222", "label": "cleanup_sprites", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__handle_collisions__230", "label": "handle_collisions", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__153", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "level__spawn_boss__86", "label": "spawn_boss", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "level__spawn_batch__37", "label": "spawn_batch", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game___handle_teleports__295", "label": "_handle_teleports", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "player__gain_xp__52", "label": "gain_xp", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__get_stats__146", "label": "get_stats", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "game__trigger_level_up__103", "label": "trigger_level_up", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui___draw_weapon_loadout__156", "label": "_draw_weapon_loadout", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui___draw_minimap__88", "label": "_draw_minimap", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "level__spawn_entity__53", "label": "spawn_entity", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "level__spawn_swarm_ring__96", "label": "spawn_swarm_ring", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "main____module_scope____0", "label": "\u003cmodule\u003e", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "player____init____9", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "player__starting_weapon_class__3", "label": "starting_weapon_class", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui__plot__107", "label": "plot", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui___sprite_world_pos__83", "label": "_sprite_world_pos", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui___wrap_text__246", "label": "_wrap_text", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui___try_buy_upgrade__288", "label": "_try_buy_upgrade", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____24", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____12", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__37", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__get_stats__28", "label": "get_stats", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____79", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__deal_damage__94", "label": "deal_damage", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____142", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____208", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update_books__221", "label": "update_books", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__get_stats__213", "label": "get_stats", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__235", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__343", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons___nearest_enemy__244", "label": "_nearest_enemy", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____370", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__374", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____402", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__406", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____431", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__435", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____460", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__464", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____485", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____512", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__516", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____543", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__548", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "characters__starting_weapon_class__26", "label": "starting_weapon_class", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__apply_knockback__27", "label": "apply_knockback", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__take_damage__40", "label": "take_damage", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__setup_image__80", "label": "setup_image", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__setup_image__91", "label": "setup_image", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__setup_image__103", "label": "setup_image", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__setup_image__126", "label": "setup_image", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__setup_image__152", "label": "setup_image", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies____init____183", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__update__198", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__setup_image__219", "label": "setup_image", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__setup_image__259", "label": "setup_image", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "enemies__take_damage__264", "label": "take_damage", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "level____init____9", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "player__update__60", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites____init____10", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites__update__19", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites____init____23", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites__update__33", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites____init____37", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites____init____49", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites____init____61", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites__update__74", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites____init____81", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites____init____93", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "sprites__update__109", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "ui____init____24", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__17", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__107", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____112", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__128", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____163", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__176", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____256", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__271", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____299", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__313", "label": "update", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons____init____330", "label": "__init__", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": "weapons__update__489", "label": "update", "shape": "dot", "size": 10}]);
+                  edges = new vis.DataSet([{"arrows": "to", "from": "run____module_scope____0", "to": "ui__show_start_screen__262", "width": 1.0}, {"arrows": "to", "from": "run____module_scope____0", "to": "game__new__53", "width": 1.0}, {"arrows": "to", "from": "run____module_scope____0", "to": "ui__show_go_screen__336", "width": 1.0}, {"arrows": "to", "from": "ui__show_start_screen__262", "to": "ui__draw_text__28", "width": 5.0}, {"arrows": "to", "from": "ui__show_start_screen__262", "to": "ui__show_character_select__193", "width": 1.0}, {"arrows": "to", "from": "ui__show_start_screen__262", "to": "ui__show_shop_screen__299", "width": 1.0}, {"arrows": "to", "from": "game__new__53", "to": "game___place_teleport_pairs__77", "width": 1.0}, {"arrows": "to", "from": "game__new__53", "to": "game__run__175", "width": 1.0}, {"arrows": "to", "from": "ui__show_go_screen__336", "to": "ui__draw_text__28", "width": 6.0}, {"arrows": "to", "from": "ui__show_go_screen__336", "to": "ui__wait_for_key__365", "width": 1.0}, {"arrows": "to", "from": "enemies____init____11", "to": "enemies__setup_image__32", "width": 8.0}, {"arrows": "to", "from": "enemies__update__65", "to": "enemies___apply_kb_movement__23", "width": 1.0}, {"arrows": "to", "from": "enemies____init____74", "to": "enemies____init____11", "width": 8.0}, {"arrows": "to", "from": "enemies____init____85", "to": "enemies____init____11", "width": 8.0}, {"arrows": "to", "from": "enemies____init____96", "to": "enemies____init____11", "width": 8.0}, {"arrows": "to", "from": "enemies__update__107", "to": "enemies___apply_kb_movement__23", "width": 1.0}, {"arrows": "to", "from": "enemies____init____120", "to": "enemies____init____11", "width": 8.0}, {"arrows": "to", "from": "enemies__update__130", "to": "enemies___apply_kb_movement__23", "width": 1.0}, {"arrows": "to", "from": "enemies____init____142", "to": "enemies____init____11", "width": 8.0}, {"arrows": "to", "from": "enemies__update__157", "to": "enemies___apply_kb_movement__23", "width": 1.0}, {"arrows": "to", "from": "enemies____init____211", "to": "enemies____init____11", "width": 8.0}, {"arrows": "to", "from": "enemies__update__224", "to": "enemies___apply_kb_movement__23", "width": 1.0}, {"arrows": "to", "from": "enemies____init____251", "to": "enemies____init____11", "width": 8.0}, {"arrows": "to", "from": "enemies__update__291", "to": "enemies___apply_kb_movement__23", "width": 1.0}, {"arrows": "to", "from": "game____init____15", "to": "game__load_data__25", "width": 1.0}, {"arrows": "to", "from": "game__run__175", "to": "game__save_data__44", "width": 1.0}, {"arrows": "to", "from": "game__run__175", "to": "game__events__193", "width": 1.0}, {"arrows": "to", "from": "game__run__175", "to": "game__draw__313", "width": 1.0}, {"arrows": "to", "from": "game__run__175", "to": "game__update__207", "width": 1.0}, {"arrows": "to", "from": "game__events__193", "to": "game__select_upgrade__170", "width": 3.0}, {"arrows": "to", "from": "game__draw__313", "to": "level__get_current_zone__14", "width": 1.0}, {"arrows": "to", "from": "game__draw__313", "to": "game__draw_floor_grid__333", "width": 1.0}, {"arrows": "to", "from": "game__draw__313", "to": "ui__draw_level_up__173", "width": 1.0}, {"arrows": "to", "from": "game__draw__313", "to": "ui__draw_hud__35", "width": 1.0}, {"arrows": "to", "from": "game__update__207", "to": "level__update__22", "width": 1.0}, {"arrows": "to", "from": "game__update__207", "to": "game__cleanup_sprites__222", "width": 1.0}, {"arrows": "to", "from": "game__update__207", "to": "game__handle_collisions__230", "width": 1.0}, {"arrows": "to", "from": "game__update__207", "to": "weapons__update__153", "width": 1.0}, {"arrows": "to", "from": "level__update__22", "to": "level__get_current_zone__14", "width": 1.0}, {"arrows": "to", "from": "level__update__22", "to": "level__spawn_boss__86", "width": 1.0}, {"arrows": "to", "from": "level__update__22", "to": "level__spawn_batch__37", "width": 1.0}, {"arrows": "to", "from": "game__handle_collisions__230", "to": "game___handle_teleports__295", "width": 1.0}, {"arrows": "to", "from": "game__handle_collisions__230", "to": "player__gain_xp__52", "width": 1.0}, {"arrows": "to", "from": "weapons__update__153", "to": "weapons__get_stats__146", "width": 1.0}, {"arrows": "to", "from": "player__gain_xp__52", "to": "game__trigger_level_up__103", "width": 1.0}, {"arrows": "to", "from": "ui__draw_level_up__173", "to": "ui__draw_text__28", "width": 4.0}, {"arrows": "to", "from": "ui__draw_hud__35", "to": "ui__draw_text__28", "width": 7.0}, {"arrows": "to", "from": "ui__draw_hud__35", "to": "ui___draw_weapon_loadout__156", "width": 1.0}, {"arrows": "to", "from": "ui__draw_hud__35", "to": "ui___draw_minimap__88", "width": 1.0}, {"arrows": "to", "from": "level__spawn_batch__37", "to": "level__spawn_entity__53", "width": 1.0}, {"arrows": "to", "from": "level__spawn_batch__37", "to": "level__spawn_swarm_ring__96", "width": 1.0}, {"arrows": "to", "from": "main____module_scope____0", "to": "ui__show_start_screen__262", "width": 1.0}, {"arrows": "to", "from": "main____module_scope____0", "to": "game__new__53", "width": 1.0}, {"arrows": "to", "from": "main____module_scope____0", "to": "ui__show_go_screen__336", "width": 1.0}, {"arrows": "to", "from": "player____init____9", "to": "player__starting_weapon_class__3", "width": 1.0}, {"arrows": "to", "from": "ui___draw_minimap__88", "to": "ui__plot__107", "width": 8.0}, {"arrows": "to", "from": "ui___draw_minimap__88", "to": "ui___sprite_world_pos__83", "width": 7.0}, {"arrows": "to", "from": "ui__show_character_select__193", "to": "ui__draw_text__28", "width": 3.0}, {"arrows": "to", "from": "ui__show_character_select__193", "to": "ui___wrap_text__246", "width": 1.0}, {"arrows": "to", "from": "ui__show_shop_screen__299", "to": "ui__draw_text__28", "width": 6.0}, {"arrows": "to", "from": "ui__show_shop_screen__299", "to": "ui___try_buy_upgrade__288", "width": 1.0}, {"arrows": "to", "from": "weapons____init____24", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons__update__37", "to": "weapons__get_stats__28", "width": 1.0}, {"arrows": "to", "from": "weapons____init____79", "to": "weapons__deal_damage__94", "width": 1.0}, {"arrows": "to", "from": "weapons____init____142", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons____init____208", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons____init____208", "to": "weapons__update_books__221", "width": 1.0}, {"arrows": "to", "from": "weapons__update_books__221", "to": "weapons__get_stats__213", "width": 1.0}, {"arrows": "to", "from": "weapons__update__235", "to": "weapons__get_stats__213", "width": 1.0}, {"arrows": "to", "from": "weapons__update__235", "to": "weapons__update_books__221", "width": 1.0}, {"arrows": "to", "from": "weapons__update__343", "to": "weapons___nearest_enemy__244", "width": 1.0}, {"arrows": "to", "from": "weapons____init____370", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons__update__374", "to": "weapons___nearest_enemy__244", "width": 1.0}, {"arrows": "to", "from": "weapons____init____402", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons__update__406", "to": "weapons___nearest_enemy__244", "width": 1.0}, {"arrows": "to", "from": "weapons____init____431", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons__update__435", "to": "weapons___nearest_enemy__244", "width": 1.0}, {"arrows": "to", "from": "weapons____init____460", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons__update__464", "to": "weapons___nearest_enemy__244", "width": 1.0}, {"arrows": "to", "from": "weapons____init____485", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons____init____512", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons__update__516", "to": "weapons___nearest_enemy__244", "width": 1.0}, {"arrows": "to", "from": "weapons____init____543", "to": "weapons____init____12", "width": 11.0}, {"arrows": "to", "from": "weapons__update__548", "to": "weapons___nearest_enemy__244", "width": 1.0}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {
+    "configure": {
+        "enabled": false
+    },
+    "edges": {
+        "color": {
+            "inherit": true
+        },
+        "smooth": {
+            "enabled": true,
+            "type": "dynamic"
+        }
+    },
+    "interaction": {
+        "dragNodes": true,
+        "hideEdgesOnDrag": false,
+        "hideNodesOnDrag": false
+    },
+    "physics": {
+        "enabled": true,
+        "stabilization": {
+            "enabled": true,
+            "fit": true,
+            "iterations": 1000,
+            "onlyDynamicEdges": false,
+            "updateInterval": 50
+        }
+    }
+};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+                      network.on("stabilizationProgress", function(params) {
+                          document.getElementById('loadingBar').removeAttribute("style");
+                          var maxWidth = 496;
+                          var minWidth = 20;
+                          var widthFactor = params.iterations/params.total;
+                          var width = Math.max(minWidth,maxWidth * widthFactor);
+                          document.getElementById('bar').style.width = width + 'px';
+                          document.getElementById('text').innerHTML = Math.round(widthFactor*100) + '%';
+                      });
+                      network.once("stabilizationIterationsDone", function() {
+                          document.getElementById('text').innerHTML = '100%';
+                          document.getElementById('bar').style.width = '496px';
+                          document.getElementById('loadingBar').style.opacity = 0;
+                          // really clean the dom element
+                          setTimeout(function () {document.getElementById('loadingBar').style.display = 'none';}, 500);
+                      });
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>
