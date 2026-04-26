@@ -303,6 +303,8 @@ div.vis-network div.vis-navigation div.vis-button:active {
     var currentView = 'file';
     var currentColorMode = 'default';
     var focusedNode = null;
+    var LARGE_GRAPH_THRESHOLD = 300;
+    var isLargeGraph = false;
 
     function lerp(a, b, t) {{
         return a + (b - a) * t;
@@ -357,6 +359,35 @@ div.vis-network div.vis-navigation div.vis-button:active {
         var graphData = allGraphs[viewName];
         if (!graphData) return;
 
+        var nodeCount = graphData.nodes.length;
+        isLargeGraph = nodeCount > LARGE_GRAPH_THRESHOLD;
+
+        if (isLargeGraph) {{
+            network.setOptions({{
+                physics: {{ enabled: false }},
+                edges: {{ smooth: false }},
+                interaction: {{ hideEdgesOnDrag: true, tooltipDelay: 300 }}
+            }});
+        }} else {{
+            network.setOptions({{
+                physics: {{
+                    enabled: true,
+                    barnesHut: {{
+                        gravitationalConstant: -5000,
+                        centralGravity: 0.05,
+                        springLength: 250,
+                        springConstant: 0.01,
+                        damping: 0.3,
+                        avoidOverlap: 0.6
+                    }},
+                    solver: 'barnesHut',
+                    stabilization: {{ iterations: 200, fit: true }}
+                }},
+                edges: {{ smooth: {{ type: 'continuous', roundness: 0.2 }} }},
+                interaction: {{ hideEdgesOnDrag: false, tooltipDelay: 100 }}
+            }});
+        }}
+
         var newNodes = [];
         var newEdges = [];
 
@@ -396,9 +427,14 @@ div.vis-network div.vis-navigation div.vis-button:active {
         nodes.add(newNodes);
         edges.add(newEdges);
 
-        setTimeout(function() {{
-            network.fit();
-        }}, 500);
+        if (isLargeGraph) {{
+            setTimeout(function() {{ network.fit(); }}, 100);
+        }} else {{
+            network.once('stabilizationIterationsDone', function() {{
+                network.setOptions({{ physics: {{ enabled: false }} }});
+            }});
+            setTimeout(function() {{ network.fit(); }}, 500);
+        }}
     }}
 
     function updateButtonStyles(viewName) {{
@@ -439,15 +475,17 @@ div.vis-network div.vis-navigation div.vis-button:active {
                 return;
             }}
 
+            var nodeUpdates = [];
             nodes.forEach(function(n) {{
                 if (cycleNodeSet.has(n.id)) {{
-                    nodes.update({{
+                    nodeUpdates.push({{
                         id: n.id,
                         color: {{ background: '#ff4444', border: '#ff0000', highlight: {{ background: '#ff4444', border: '#FFD700' }}, hover: {{ background: '#ff6666', border: '#ff0000' }} }},
-                        borderWidth: 3
+                        borderWidth: 3,
+                        font: {{ color: '#ddd' }}
                     }});
                 }} else {{
-                    nodes.update({{
+                    nodeUpdates.push({{
                         id: n.id,
                         color: {{ background: '#333', border: '#444' }},
                         font: {{ color: '#555' }},
@@ -455,30 +493,34 @@ div.vis-network div.vis-navigation div.vis-button:active {
                     }});
                 }}
             }});
+            nodes.update(nodeUpdates);
 
+            var edgeUpdates = [];
             edges.forEach(function(e) {{
                 var edgeKey = e.from + '>>>' + e.to;
                 if (cycleEdgeSet.has(edgeKey)) {{
-                    edges.update({{
+                    edgeUpdates.push({{
                         id: e.id,
                         color: {{ color: '#ff4444', opacity: 1.0 }},
                         width: 2.5
                     }});
                 }} else {{
-                    edges.update({{
+                    edgeUpdates.push({{
                         id: e.id,
                         color: {{ color: '#333', opacity: 0.15 }},
                         width: 0.5
                     }});
                 }}
             }});
+            edges.update(edgeUpdates);
             return;
         }}
 
+        var nodeUpdates = [];
         nodes.forEach(function(n) {{
             var color = getNodeColor(n.id, mode);
             var size = getNodeSize(n.id);
-            nodes.update({{
+            nodeUpdates.push({{
                 id: n.id,
                 color: {{ background: color, border: color, highlight: {{ background: color, border: '#FFD700' }}, hover: {{ background: color, border: '#FFD700' }} }},
                 size: size,
@@ -486,14 +528,17 @@ div.vis-network div.vis-navigation div.vis-button:active {
                 font: {{ color: '#ddd' }}
             }});
         }});
+        nodes.update(nodeUpdates);
 
+        var edgeUpdates = [];
         edges.forEach(function(e) {{
-            edges.update({{
+            edgeUpdates.push({{
                 id: e.id,
                 color: {{ color: '#dddddd', opacity: 0.85 }},
                 width: 1.5
             }});
         }});
+        edges.update(edgeUpdates);
 
         var sizeNote = document.getElementById('size-legend-note');
         if (sizeNote) {{
@@ -525,24 +570,25 @@ div.vis-network div.vis-navigation div.vis-button:active {
         var connectedNodes = new Set(network.getConnectedNodes(nodeId));
         var connectedEdges = new Set(network.getConnectedEdges(nodeId));
 
+        var nodeUpdates = [];
         nodes.forEach(function(n) {{
             var nodeColor = getNodeColor(n.id, currentColorMode);
             if (n.id === nodeId) {{
-                nodes.update({{
+                nodeUpdates.push({{
                     id: n.id,
                     borderWidth: 4,
-                    color: {{ background: nodeColor, border: '#FFD700', highlight: {{ background: nodeColor, border: '#FFD700' }}, hover: {{ background: nodeColor, border: '#FFD700' }} }}
+                    color: {{ background: nodeColor, border: '#FFD700', highlight: {{ background: nodeColor, border: '#FFD700' }}, hover: {{ background: nodeColor, border: '#FFD700' }} }},
+                    font: {{ color: '#ddd' }}
                 }});
             }} else if (connectedNodes.has(n.id)) {{
-                // neighbors keep current view's color palette
-                nodes.update({{
+                nodeUpdates.push({{
                     id: n.id,
                     color: {{ background: nodeColor, border: nodeColor, highlight: {{ background: nodeColor, border: '#FFD700' }}, hover: {{ background: nodeColor, border: '#FFD700' }} }},
                     font: {{ color: '#ddd' }},
                     borderWidth: 1
                 }});
             }} else {{
-                nodes.update({{
+                nodeUpdates.push({{
                     id: n.id,
                     color: {{ background: '#2a2a2a', border: '#333' }},
                     font: {{ color: '#444' }},
@@ -550,22 +596,25 @@ div.vis-network div.vis-navigation div.vis-button:active {
                 }});
             }}
         }});
+        nodes.update(nodeUpdates);
 
+        var edgeUpdates = [];
         edges.forEach(function(e) {{
             if (connectedEdges.has(e.id)) {{
-                edges.update({{
+                edgeUpdates.push({{
                     id: e.id,
                     color: {{ color: '#FFD700', opacity: 1.0 }},
                     width: 3
                 }});
             }} else {{
-                edges.update({{
+                edgeUpdates.push({{
                     id: e.id,
                     color: {{ color: '#222', opacity: 0.1 }},
                     width: 0.5
                 }});
             }}
         }});
+        edges.update(edgeUpdates);
     }}
 
     function openInVSCode(nodeId) {{
@@ -594,7 +643,6 @@ div.vis-network div.vis-navigation div.vis-button:active {
             if (focusedNode === clicked) {{
                 clearFocus();
             }} else {{
-                clearFocus();
                 focusOnNode(clicked);
             }}
         }} else if (params.edges.length === 0) {{
@@ -603,6 +651,7 @@ div.vis-network div.vis-navigation div.vis-button:active {
     }});
 
     network.once('stabilized', function() {{
+        network.setOptions({{ physics: {{ enabled: false }} }});
         network.fit();
     }});
 }})();
