@@ -140,7 +140,7 @@ def _get_orbital_vis_options() -> dict:
             "enabled": True,
             "barnesHut": {
                 "gravitationalConstant": -5000,
-                "centralGravity": 0.15,
+                "centralGravity": 0.05,
                 "springLength": 250,
                 "springConstant": 0.01,
                 "damping": 0.3,
@@ -263,6 +263,7 @@ def _inject_enhancements(
       <span style="display: inline-block; width: 20px; border-top: 2px dashed #999;"></span>
       <span>Dynamic import</span>
     </div>
+    <div id="size-legend-note" style="margin-top: 6px; font-style: italic;">Node size = Susceptibility</div>
   </div>
   <div style="font-size: 10px; color: #888; border-top: 1px solid #444; padding-top: 10px; margin-top: 8px;">
     <div style="font-weight: 600; margin-bottom: 6px; color: #999;">Controls</div>
@@ -341,6 +342,9 @@ div.vis-network div.vis-navigation div.vis-button:active {
     function getNodeSize(nodeId) {{
         var m = allMetrics[currentView] && allMetrics[currentView][nodeId];
         if (!m) return 15;
+        if (currentColorMode === 'default') {{
+            return 10 + m.susceptibility * 35;
+        }}
         return 10 + m.impact * 35;
     }}
 
@@ -485,6 +489,11 @@ div.vis-network div.vis-navigation div.vis-button:active {
                 width: 1
             }});
         }});
+
+        var sizeNote = document.getElementById('size-legend-note');
+        if (sizeNote) {{
+            sizeNote.textContent = mode === 'default' ? 'Node size = Susceptibility' : 'Node size = Impact';
+        }}
     }};
 
     window.resetView = function() {{
@@ -727,7 +736,7 @@ def generate_interactive_graph(
         if not m:
             continue
         color_hex = holistic_color(m.impact)
-        size = 10 + m.impact * 35
+        size = 10 + m.susceptibility * 35
 
         node_opts = {
             "label": node_data["label"],
