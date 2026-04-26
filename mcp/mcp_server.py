@@ -18,7 +18,7 @@ from functools import wraps
 
 from fastmcp import FastMCP
 
-from fake_analyzer import get_analyzer
+from real_analyzer import get_analyzer
 from formatters import (
     format_analyze_repo,
     format_check_change,

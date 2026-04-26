@@ -1,3 +1,6 @@
 fastmcp
 fastapi
 uvicorn
+networkx
+radon
+lizard
