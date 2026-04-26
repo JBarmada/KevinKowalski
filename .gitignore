@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.env
+
+# Generated MCP UI Files
+explorer.html
+
+# OS & IDEs
+.DS_Store
+.vscode/
+.idea/
