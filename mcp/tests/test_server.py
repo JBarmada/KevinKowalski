@@ -74,3 +74,16 @@ def test_get_metric_graph_returns_valid_json():
     out = _call_tool("get_metric_graph", {"path": "."})
     parsed = json.loads(out)
     assert "nodes" in parsed and "edges" in parsed
+
+
+def test_tool_exception_returned_as_string(monkeypatch):
+    """A raised exception inside a tool must surface as a readable string,
+    never as an opaque MCP protocol error."""
+    def boom(*_a, **_kw):
+        raise RuntimeError("simulated analyzer failure")
+    monkeypatch.setattr(mcp_server._analyzer, "analyze", boom)
+    out = _call_tool("analyze_repo", {"path": "."})
+    assert isinstance(out, str)
+    assert "Error" in out or "error" in out
+    assert "RuntimeError" in out
+    assert "simulated analyzer failure" in out
