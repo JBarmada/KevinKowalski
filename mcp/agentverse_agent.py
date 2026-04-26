@@ -45,6 +45,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import aiohttp
+import networkx as nx
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import UUID4
@@ -64,6 +65,7 @@ from formatters import (
     format_check_change,
     format_generate_graph,
     format_module_health,
+    format_refactor_assistance,
     format_suggest_refactor,
 )
 
@@ -341,7 +343,8 @@ Available tools:
 2. module_health(path, module) - per-module card; ARG = dotted module name
 3. suggest_refactor(path, feature_description) - pre-feature advice; ARG = feature
 4. check_change(path, files) - delta after edits; ARG = comma-separated file list
-5. generate_graph(path) - generate interactive HTML dependency graph
+5. refactor_assistance(path) - Ca/Ce-focused refactor brief at package, file, and function levels
+6. generate_graph(path) - generate interactive HTML dependency graph
 
 Examples:
 - "analyze https://github.com/pallets/flask" -> TOOL:analyze_repo|PATH:https://github.com/pallets/flask|ARG:
@@ -349,6 +352,7 @@ Examples:
 - "check health of handlers.user in https://github.com/x/y" -> TOOL:module_health|PATH:https://github.com/x/y|ARG:handlers.user
 - "I want to add auth in https://github.com/x/y" -> TOOL:suggest_refactor|PATH:https://github.com/x/y|ARG:add auth
 - "check changes to handlers/user.py in /home/u/p" -> TOOL:check_change|PATH:/home/u/p|ARG:handlers/user.py
+- "coupling metrics for https://github.com/x/y" -> TOOL:refactor_assistance|PATH:https://github.com/x/y|ARG:
 - "graph for https://github.com/x/y" -> TOOL:generate_graph|PATH:https://github.com/x/y|ARG:
 
 ============================================================
@@ -615,11 +619,85 @@ def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
             result = analyzer.incremental_check(path, files)
             return format_check_change(result)
 
+        elif tool_name == "refactor_assistance":
+            from visualization.utils import (
+                aggregate_to_packages,
+                build_function_graph,
+                compute_metrics,
+                find_cycle_info,
+                parse_edges,
+            )
+            source_root = Path(path)
+            edges_list, all_modules = parse_edges(source_root)
+
+            file_graph = nx.DiGraph()
+            for module in all_modules:
+                file_graph.add_node(module)
+            for edge in edges_list:
+                file_graph.add_edge(edge.src, edge.dst)
+            file_metrics = compute_metrics(file_graph)
+
+            pkg_edges = aggregate_to_packages(edges_list)
+            package_graph = nx.DiGraph()
+            pkg_names = {m.split(".")[0] for m in all_modules}
+            for pkg in pkg_names:
+                package_graph.add_node(pkg)
+            for edge in pkg_edges:
+                package_graph.add_edge(edge.src, edge.dst)
+            package_metrics = compute_metrics(package_graph)
+
+            try:
+                function_graph, function_metadata = build_function_graph(source_root)
+            except Exception:
+                function_graph = nx.DiGraph()
+                function_metadata = {}
+            function_metrics = compute_metrics(function_graph)
+
+            def _metrics_to_dict(nm):
+                return {
+                    "ca": nm.ca, "ce": nm.ce,
+                    "instability": nm.instability,
+                    "impact": nm.impact,
+                    "susceptibility": nm.susceptibility,
+                    "raw_impact": nm.raw_impact,
+                    "raw_susceptibility": nm.raw_susceptibility,
+                }
+
+            def _level_block(graph, metrics, metadata=None, top_n=5, cap=3):
+                if graph.number_of_nodes() == 0 or not metrics:
+                    return {"node_count": 0, "edge_count": 0,
+                            "high_susceptibility_detail": [], "high_impact_detail": []}
+                nodes = list(graph.nodes())
+                by_sus = sorted(nodes, key=lambda n: metrics[n].raw_susceptibility, reverse=True)[:top_n]
+                by_imp = sorted(nodes, key=lambda n: metrics[n].raw_impact, reverse=True)[:top_n]
+                sus_detail = [{"id": n, "metrics": _metrics_to_dict(metrics[n]),
+                               "high_impact_dependents": [{"id": p, **_metrics_to_dict(metrics[p])}
+                                   for p in sorted(list(graph.predecessors(n)),
+                                       key=lambda p: metrics[p].raw_impact, reverse=True)[:cap]]}
+                              for n in by_sus]
+                imp_detail = [{"id": n, "metrics": _metrics_to_dict(metrics[n]),
+                               "high_susceptibility_dependencies": [{"id": s, **_metrics_to_dict(metrics[s])}
+                                   for s in sorted(list(graph.successors(n)),
+                                       key=lambda s: metrics[s].raw_susceptibility, reverse=True)[:cap]]}
+                              for n in by_imp]
+                return {"node_count": graph.number_of_nodes(), "edge_count": graph.number_of_edges(),
+                        "high_susceptibility_detail": sus_detail, "high_impact_detail": imp_detail}
+
+            payload = {
+                "root": path,
+                "levels": {
+                    "package": _level_block(package_graph, package_metrics),
+                    "file": _level_block(file_graph, file_metrics),
+                    "function": _level_block(function_graph, function_metrics, function_metadata),
+                },
+            }
+            return format_refactor_assistance(payload)
+
         elif tool_name == "generate_graph":
             return _generate_graph_for_path(path)
 
         else:
-            return f"Unknown tool: {tool_name}. Available: analyze_repo, module_health, suggest_refactor, check_change, generate_graph"
+            return f"Unknown tool: {tool_name}. Available: analyze_repo, module_health, suggest_refactor, check_change, refactor_assistance, generate_graph"
 
     except Exception as e:
         return f"Failed to process repository: {type(e).__name__}: {e}"
