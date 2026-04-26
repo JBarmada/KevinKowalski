@@ -6,8 +6,10 @@ dependencies = [
     "fastmcp>=3.2.4",
     "matplotlib>=3.10.9",
     "networkx>=3.6.1",
+    "openai>=2.32.0",
     "pydot>=4.0.1",
     "pyqt6>=6.11.0",
+    "uagents>=0.24.2",
 ]
 
 [dependency-groups]
