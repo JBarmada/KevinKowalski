@@ -12,6 +12,23 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import networkx as nx
 
+_SKIP_DIRS = frozenset({".venv", "venv", ".git", "__pycache__", "node_modules",
+                        ".tox", ".eggs", ".mypy_cache", "site-packages",
+                        "dist", "build", ".nox", "htmlcov", ".pytest_cache"})
+
+
+def _iter_py_files(source_root: Path) -> list[Path]:
+    """Recursively find .py files, skipping virtual-env and build directories."""
+    results: list[Path] = []
+    for item in sorted(source_root.iterdir()):
+        if item.name in _SKIP_DIRS or item.name.startswith("."):
+            continue
+        if item.is_file() and item.suffix == ".py":
+            results.append(item)
+        elif item.is_dir():
+            results.extend(_iter_py_files(item))
+    return results
+
 
 # NOTE: [pedagogical] ast.parse gives us a full syntax tree without executing the
 # code, so we can safely analyze any file — even one with side effects at import time.
@@ -19,7 +36,7 @@ def parse_edges(source_root: Path) -> list[tuple[str, str]]:
     """Walk source_root and return (importer, importee) pairs for every relative import."""
     edges = []
 
-    for filepath in sorted(source_root.rglob("*.py")):
+    for filepath in _iter_py_files(source_root):
         module_name = _module_name(filepath, source_root)
         tree = ast.parse(filepath.read_text(encoding="utf-8"))
 
@@ -93,7 +110,7 @@ def parse_edges_v2(source_root: Path) -> list[tuple[str, str]]:
     """Walk source_root and return all (importer, importee) edges, including bare `from . import x`."""
     edges = []
 
-    for filepath in sorted(source_root.rglob("*.py")):
+    for filepath in _iter_py_files(source_root):
         module_name = _module_name(filepath, source_root)
         tree = ast.parse(filepath.read_text(encoding="utf-8"))
         type_checking_ids = _type_checking_imports(tree)

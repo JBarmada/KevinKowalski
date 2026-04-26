@@ -42,6 +42,11 @@ from formatters import (
 )
 
 
+# Force serial function-graph generation inside the MCP server. The default
+# ProcessPoolExecutor (fork) deadlocks when run inside FastMCP's async stdio
+# transport because fork() + asyncio event loop are not safe together.
+os.environ.setdefault("KOWALSKI_FUNCTION_GRAPH_SERIAL", "1")
+
 logging.basicConfig(
     stream=sys.stderr,
     level=logging.INFO,
