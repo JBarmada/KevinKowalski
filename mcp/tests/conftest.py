@@ -27,7 +27,7 @@ if str(_MCP_DIR) not in sys.path:
 @pytest.fixture
 def analyzer():
     """The Analyzer under test. Swap to the real one by changing this fixture."""
-    from fake_analyzer import get_analyzer
+    from real_analyzer import get_analyzer
     return get_analyzer()
 
 

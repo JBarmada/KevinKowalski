@@ -15,11 +15,37 @@ class NodeMetrics(BaseModel, frozen=True):
     ca: int  # afferent coupling — how many nodes depend on this one
     ce: int  # efferent coupling — how many nodes this one depends on
     instability: float  # ce / (ca + ce); 0 = maximally stable, 1 = maximally unstable
+    # Impact: weighted Ca of this node plus weighted sum of Ca over dependents
+    # (nodes with an edge into this node; in a caller→callee graph, predecessors).
+    impact: float
+    # Susceptibility: weighted Ce of this node plus weighted sum of Ce over dependencies
+    # (nodes this node has an edge to; successors).
+    susceptibility: float
 
 
-def compute_metrics(graph: nx.DiGraph) -> dict[str, NodeMetrics]:
-    """Compute Ca, Ce, and instability for every node in a dependency graph."""
-    metrics = {}
+def compute_metrics(
+    graph: nx.DiGraph,
+    *,
+    coef_impact_ca_node: float = 1.0,
+    coef_impact_sum_ca_dependents: float = 1.0,
+    coef_susceptibility_ce_node: float = 1.0,
+    coef_susceptibility_sum_ce_dependencies: float = 1.0,
+) -> dict[str, NodeMetrics]:
+    """Compute Ca, Ce, instability, impact, and susceptibility for every node.
+
+    With an edge A → B meaning A depends on B (e.g. A calls B), B's dependents are
+    its predecessors and B's dependencies are its successors.
+
+    Impact = coef_impact_ca_node * Ca(node)
+           + coef_impact_sum_ca_dependents * (sum of Ca over dependents).
+
+    Susceptibility = coef_susceptibility_ce_node * Ce(node)
+                   + coef_susceptibility_sum_ce_dependencies * (sum of Ce over dependencies).
+
+    Each ``coef_*`` scales one whole term; summations are unweighted inside the sum.
+    """
+    # First pass: Ca/Ce/instability (impact/susceptibility need neighbors' Ca/Ce).
+    base: dict[str, tuple[int, int, float]] = {}
     for node in graph.nodes():
         ca = graph.in_degree(node)
         ce = graph.out_degree(node)
@@ -27,7 +53,26 @@ def compute_metrics(graph: nx.DiGraph) -> dict[str, NodeMetrics]:
         # — they are neither stable nor unstable, so we default to the midpoint
         # rather than dividing by zero.
         instability = ce / (ca + ce) if (ca + ce) > 0 else 0.5
-        metrics[node] = NodeMetrics(ca=ca, ce=ce, instability=instability)
+        base[node] = (ca, ce, instability)
+
+    metrics: dict[str, NodeMetrics] = {}
+    for node in graph.nodes():
+        ca, ce, instability = base[node]
+        # Raw sums (no coefficients applied inside the summation).
+        sum_ca_dependents = sum(base[p][0] for p in graph.predecessors(node))
+        sum_ce_dependencies = sum(base[s][1] for s in graph.successors(node))
+        impact = coef_impact_ca_node * ca + coef_impact_sum_ca_dependents * sum_ca_dependents
+        susceptibility = (
+            coef_susceptibility_ce_node * ce
+            + coef_susceptibility_sum_ce_dependencies * sum_ce_dependencies
+        )
+        metrics[node] = NodeMetrics(
+            ca=ca,
+            ce=ce,
+            instability=instability,
+            impact=impact,
+            susceptibility=susceptibility,
+        )
     return metrics
 
 
@@ -142,7 +187,10 @@ def get_metrics(root: pathlib.Path):
     metrics = compute_metrics(graph)
 
     for node, m in sorted(metrics.items()):
-        print(f"{node}: Ca={m.ca}, Ce={m.ce}, I={m.instability:.2f}")
+        print(
+            f"{node}: Ca={m.ca}, Ce={m.ce}, I={m.instability:.2f}, "
+            f"Impact={m.impact:.2f}, Susceptibility={m.susceptibility:.2f}"
+        )
 
     net = Network(directed=True, height="100vh", width="100%", cdn_resources="remote")
     net.from_nx(graph)

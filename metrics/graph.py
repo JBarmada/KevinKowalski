@@ -129,74 +129,62 @@ def parse_edges_v2(source_root: Path) -> list[tuple[str, str]]:
 
 # === Main ===
 
-parser = argparse.ArgumentParser(description="Visualize import-level coupling across Python modules.")
-parser.add_argument("source_dir", type=Path, help="Directory of Python source files to analyze.")
-args = parser.parse_args()
+def _main() -> None:
+    parser = argparse.ArgumentParser(description="Visualize import-level coupling across Python modules.")
+    parser.add_argument("source_dir", type=Path, help="Directory of Python source files to analyze.")
+    args = parser.parse_args()
 
-# === Build graph ===
+    source_root = args.source_dir
+    edges = parse_edges_v2(source_root)
 
-source_root = args.source_dir
-edges = parse_edges_v2(source_root)
+    graph = nx.DiGraph()
+    graph.add_edges_from(edges)
 
-graph = nx.DiGraph()
-graph.add_edges_from(edges)
+    plt.figure(figsize=(14, 10))
 
-# === Display ===
+    positions = nx.spring_layout(graph, seed=42, k=2.5)
 
-plt.figure(figsize=(14, 10))
+    def instability(node: str) -> float:
+        ca, ce = graph.in_degree(node), graph.out_degree(node)
+        if ca + ce == 0:
+            return 0.5
+        return ce / (ca + ce)
 
-# NOTE: [pedagogical] spring_layout models nodes as repelling charges and edges as
-# springs (Fruchterman-Reingold). k controls the ideal edge length; seed fixes the
-# random initial placement so the layout is reproducible.
-positions = nx.spring_layout(graph, seed=42, k=2.5)
-# positions = nx.nx_pydot.graphviz_layout(graph)
+    node_instabilities = [instability(node) for node in graph.nodes()]
+    node_colors = plt.cm.plasma(node_instabilities)
 
-# NOTE: [pedagogical] Afferent coupling (Ca) = in-degree: how many modules import
-# this one. Efferent coupling (Ce) = out-degree: how many modules this one imports.
-# High Ca means many dependents (risky to change); high Ce means many dependencies
-# (fragile if any of them change).
-# Instability I = Ce / (Ca + Ce): 0 means maximally stable (everyone depends on it,
-# it depends on nothing), 1 means maximally unstable (depends on many, depended on by none).
-def instability(node: str) -> float:
-    ca, ce = graph.in_degree(node), graph.out_degree(node)
-    if ca + ce == 0:
-        return 0.5
-    return ce / (ca + ce)
+    labels = {
+        node: f"{node}\nCa:{graph.in_degree(node)}  Ce:{graph.out_degree(node)}\nI:{instability(node):.2f}"
+        for node in graph.nodes()
+    }
 
-# NOTE: [pedagogical] plasma is a perceptually uniform colormap that runs from
-# dark purple (0.0) to bright yellow (1.0), so low-instability (stable) nodes
-# appear purple and high-instability (unstable) nodes appear yellow.
-node_instabilities = [instability(node) for node in graph.nodes()]
-node_colors = plt.cm.plasma(node_instabilities)
+    nx.draw_networkx(
+        graph,
+        pos=positions,
+        labels=labels,
+        node_color=node_colors,
+        node_size=2400,
+        font_size=7,
+        font_color="white",
+        arrows=True,
+        arrowsize=15,
+        edge_color="gray",
+    )
 
-labels = {
-    node: f"{node}\nCa:{graph.in_degree(node)}  Ce:{graph.out_degree(node)}\nI:{instability(node):.2f}"
-    for node in graph.nodes()
-}
+    for cycle in nx.simple_cycles(graph):
+        print(cycle)
 
-nx.draw_networkx(
-    graph,
-    pos=positions,
-    labels=labels,
-    node_color=node_colors,
-    node_size=2400,
-    font_size=7,
-    font_color="white",
-    arrows=True,
-    arrowsize=15,
-    edge_color="gray",
-)
+    folder_name = source_root.name
+    plt.title(f"{folder_name} internal import graph  (A -> B means A imports from B)")
+    plt.axis("off")
+    plt.tight_layout()
 
-for cycle in nx.simple_cycles(graph):
-    print(cycle)
+    output_path = Path(f"output/{folder_name}_imports.png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"Saved to {output_path}")
+    plt.show()
 
-folder_name = source_root.name
-plt.title(f"{folder_name} internal import graph  (A → B means A imports from B)")
-plt.axis("off")
-plt.tight_layout()
 
-output_path = Path(f"output/{folder_name}_imports.png")
-output_path.parent.mkdir(parents=True, exist_ok=True)
-plt.savefig(output_path, dpi=150, bbox_inches="tight")
-print(f"Saved to {output_path}")
-plt.show()
+if __name__ == "__main__":
+    _main()
