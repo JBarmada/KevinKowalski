@@ -331,7 +331,7 @@ def format_multiline_label(name: str, max_name_len: int = 18) -> str:
     if len(module_path) > max_name_len:
         module_path = ".." + module_path[-(max_name_len - 2):]
 
-    return f"{unique_name}\\n{module_path}"
+    return f"{unique_name}\n{module_path}"
 
 
 def shorten_label(name: str, max_parts: int = 2) -> str:

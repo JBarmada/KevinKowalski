@@ -88,7 +88,7 @@ def _compute_orbital_positions(
         return positions
 
     num_rings = max(1, int(math.ceil(math.sqrt(n))))
-    ring_radius_step = 250
+    ring_radius_step = 400
 
     node_idx = 0
     for ring in range(num_rings):
@@ -101,7 +101,7 @@ def _compute_orbital_positions(
             nodes_in_ring = min(1, n - node_idx)
         else:
             circumference = 2 * math.pi * radius
-            max_per_ring = max(1, int(circumference / 80))
+            max_per_ring = max(1, int(circumference / 120))
             remaining = n - node_idx
             rings_left = num_rings - ring
             nodes_in_ring = min(max_per_ring, remaining, max(1, remaining // rings_left + 1))
@@ -139,12 +139,12 @@ def _get_orbital_vis_options() -> dict:
         "physics": {
             "enabled": True,
             "barnesHut": {
-                "gravitationalConstant": -3000,
-                "centralGravity": 0.5,
-                "springLength": 150,
-                "springConstant": 0.02,
+                "gravitationalConstant": -5000,
+                "centralGravity": 0.15,
+                "springLength": 250,
+                "springConstant": 0.01,
                 "damping": 0.3,
-                "avoidOverlap": 0.3,
+                "avoidOverlap": 0.6,
             },
             "solver": "barnesHut",
             "stabilization": {"iterations": 200, "fit": True},
@@ -273,6 +273,18 @@ def _inject_enhancements(
 </div>
 """
 
+    nav_button_css = """
+<style>
+/* Override vis-network navigation button fill while preserving existing border colors */
+div.vis-network div.vis-navigation div.vis-button,
+div.vis-network div.vis-navigation div.vis-button:hover,
+div.vis-network div.vis-navigation div.vis-button:focus,
+div.vis-network div.vis-navigation div.vis-button:active {
+    background-color: #ffffff !important;
+}
+</style>
+"""
+
     custom_js = f"""
 <script type="text/javascript">
 (function() {{
@@ -349,7 +361,7 @@ def _inject_enhancements(
                 color: {{ background: color, border: color, highlight: {{ background: color, border: '#FFD700' }}, hover: {{ background: color, border: '#FFD700' }} }},
                 size: size,
                 borderWidth: 1,
-                font: {{ size: viewName === 'package' ? 9 : 11, color: '#ddd', face: 'monospace' }}
+                font: {{ size: viewName === 'package' ? 9 : 11, color: '#ddd', face: 'monospace', multi: true, align: 'center' }}
             }};
             if (n.x !== undefined) {{
                 nodeObj.x = n.x;
@@ -483,6 +495,13 @@ def _inject_enhancements(
         network.fit();
     }};
 
+    function clearFocus() {{
+        // Clear focus without changing color mode or refitting
+        focusedNode = null;
+        network.unselectAll();
+        setColorMode(currentColorMode);
+    }}
+
     function focusOnNode(nodeId) {{
         focusedNode = nodeId;
         var connectedNodes = new Set(network.getConnectedNodes(nodeId));
@@ -555,13 +574,13 @@ def _inject_enhancements(
         if (params.nodes.length > 0) {{
             var clicked = params.nodes[0];
             if (focusedNode === clicked) {{
-                resetView();
+                clearFocus();
             }} else {{
-                resetView();
+                clearFocus();
                 focusOnNode(clicked);
             }}
         }} else if (params.edges.length === 0) {{
-            resetView();
+            clearFocus();
         }}
     }});
 
@@ -572,7 +591,7 @@ def _inject_enhancements(
 </script>
 """
 
-    html = html.replace("</body>", control_panel + custom_js + "\n</body>")
+    html = html.replace("</body>", nav_button_css + control_panel + custom_js + "\n</body>")
     return html
 
 
@@ -598,7 +617,7 @@ def _build_graph_json(
         label = format_multiline_label(node)
         if function_metadata and node in function_metadata:
             meta = function_metadata[node]
-            display_name = f"{meta['label']}\\n{meta['file_path']}"
+            display_name = f"{meta['label']}()\n{meta['file_path']}"
             label = display_name
             tooltip = _build_tooltip(
                 f"{meta['file_path']}:{meta['label']}", m, meta["file_path"],
