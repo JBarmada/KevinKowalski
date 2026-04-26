@@ -13,6 +13,7 @@ from formatters import (
     format_check_change,
     format_metric_graph,
     format_module_health,
+    format_refactor_assistance,
     format_suggest_refactor,
 )
 
@@ -151,3 +152,82 @@ def test_metric_graph_edge_shape():
     parsed = json.loads(format_metric_graph(_mini_snapshot()))
     edge = parsed["edges"][0]
     assert "from" in edge and "to" in edge
+
+
+def test_refactor_assistance_formatter_smoke():
+    payload = {
+        "root": "/repo",
+        "levels": {
+            "package": {
+                "node_count": 2,
+                "edge_count": 1,
+                "high_susceptibility_detail": [
+                    {
+                        "id": "pkg_b",
+                        "metrics": {
+                            "ca": 1,
+                            "ce": 2,
+                            "instability": 0.5,
+                            "impact": 0.2,
+                            "susceptibility": 0.9,
+                            "raw_impact": 1.0,
+                            "raw_susceptibility": 9.0,
+                        },
+                        "high_impact_dependents": [
+                            {
+                                "id": "pkg_a",
+                                "ca": 2,
+                                "ce": 0,
+                                "instability": 0.0,
+                                "impact": 0.9,
+                                "susceptibility": 0.1,
+                                "raw_impact": 8.0,
+                                "raw_susceptibility": 1.0,
+                            }
+                        ],
+                    }
+                ],
+                "high_impact_detail": [
+                    {
+                        "id": "pkg_a",
+                        "metrics": {
+                            "ca": 2,
+                            "ce": 0,
+                            "instability": 0.0,
+                            "impact": 0.9,
+                            "susceptibility": 0.1,
+                            "raw_impact": 8.0,
+                            "raw_susceptibility": 1.0,
+                        },
+                        "high_susceptibility_dependencies": [
+                            {
+                                "id": "pkg_b",
+                                "ca": 1,
+                                "ce": 2,
+                                "instability": 0.5,
+                                "impact": 0.2,
+                                "susceptibility": 0.9,
+                                "raw_impact": 1.0,
+                                "raw_susceptibility": 9.0,
+                            }
+                        ],
+                    }
+                ],
+            },
+            "file": {
+                "node_count": 0,
+                "edge_count": 0,
+                "high_susceptibility_detail": [],
+                "high_impact_detail": [],
+            },
+            "function": {
+                "node_count": 0,
+                "edge_count": 0,
+                "high_susceptibility_detail": [],
+                "high_impact_detail": [],
+            },
+        },
+    }
+    out = format_refactor_assistance(payload)
+    assert "pkg_b" in out and "pkg_a" in out
+    assert "Package level" in out and "Function level" in out

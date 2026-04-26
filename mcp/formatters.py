@@ -148,6 +148,91 @@ def format_check_change(check_result: dict) -> str:
     return "\n".join(lines)
 
 
+_REFACTOR_DIRECTION = (
+    "**How to use these metrics in refactors**\n"
+    "- **Susceptible** nodes (high *susceptibility*, driven by Ce-style fan-out through the graph) "
+    "are fragile integration hubs. Prefer **reducing how many high-*impact* dependents** they have "
+    "(predecessors in the graph): fewer modules/functions should transitively lean on them; break "
+    "chains with interfaces, facades, or by moving stable logic outward.\n"
+    "- **High-impact** nodes (high *impact*, driven by Ca-style fan-in) are expensive to change. "
+    "Prefer **reducing how many high-*susceptibility* dependencies** they pull in (successors in the "
+    "graph): narrow imports/calls, split responsibilities, or delegate volatile work behind stable seams.\n"
+    "\n"
+    "_Graphs and `compute_metrics` match the **visualization** pipeline (`generate_graph`): "
+    "**package** = imports collapsed to top-level packages, **file** = dotted module / file graph, "
+    "**function** = Jedi-resolved caller→callee edges._\n"
+)
+
+
+def format_refactor_assistance(payload: dict) -> str:
+    """Markdown: Ca/Ce, instability, impact/susceptibility at package, file, and function levels."""
+    lines = [
+        "## Refactor assistance — coupling metrics",
+        "",
+        f"_Repo: `{payload.get('root', '')}`_",
+        "",
+        _REFACTOR_DIRECTION,
+        "",
+    ]
+
+    for level_key, title in (
+        ("package", "### Package level (collapsed import graph)"),
+        ("file", "### File / module level (import graph)"),
+        ("function", "### Function level (call graph)"),
+    ):
+        block = payload.get("levels", {}).get(level_key) or {}
+        lines.append(title)
+        lines.append(
+            f"- Nodes: **{block.get('node_count', 0)}**, edges: **{block.get('edge_count', 0)}**"
+        )
+        if not block.get("high_susceptibility_detail") and not block.get("high_impact_detail"):
+            lines.append("- _(No nodes or metrics available for this layer.)_")
+            lines.append("")
+            continue
+
+        lines.append("")
+        lines.append("#### High susceptibility — sample dependents (especially watch **high impact**)")
+        for row in block.get("high_susceptibility_detail", [])[:6]:
+            mid = row.get("id", "?")
+            m = row.get("metrics", {})
+            lines.append(
+                f"- **`{mid}`** — Ca={m.get('ca', 0)}, Ce={m.get('ce', 0)}, "
+                f"I={float(m.get('instability', 0)):.2f}, "
+                f"impact={float(m.get('impact', 0)):.2f} (raw {float(m.get('raw_impact', 0)):.1f}), "
+                f"susceptibility={float(m.get('susceptibility', 0)):.2f} "
+                f"(raw {float(m.get('raw_susceptibility', 0)):.1f})"
+            )
+            for dep in row.get("high_impact_dependents", [])[:3]:
+                did = dep.get("id", "?")
+                lines.append(
+                    f"  - depends-on-it: **`{did}`** — Ca={dep.get('ca')}, Ce={dep.get('ce')}, "
+                    f"I={float(dep.get('instability', 0)):.2f}, raw impact={float(dep.get('raw_impact', 0)):.1f}"
+                )
+
+        lines.append("")
+        lines.append("#### High impact — sample dependencies (especially watch **high susceptibility**)")
+        for row in block.get("high_impact_detail", [])[:6]:
+            mid = row.get("id", "?")
+            m = row.get("metrics", {})
+            lines.append(
+                f"- **`{mid}`** — Ca={m.get('ca', 0)}, Ce={m.get('ce', 0)}, "
+                f"I={float(m.get('instability', 0)):.2f}, "
+                f"impact={float(m.get('impact', 0)):.2f} (raw {float(m.get('raw_impact', 0)):.1f}), "
+                f"susceptibility={float(m.get('susceptibility', 0)):.2f} "
+                f"(raw {float(m.get('raw_susceptibility', 0)):.1f})"
+            )
+            for dep in row.get("high_susceptibility_dependencies", [])[:3]:
+                did = dep.get("id", "?")
+                lines.append(
+                    f"  - depends-on: **`{did}`** — Ce={dep.get('ce')}, Ca={dep.get('ca')}, "
+                    f"I={float(dep.get('instability', 0)):.2f}, "
+                    f"raw susceptibility={float(dep.get('raw_susceptibility', 0)):.1f}"
+                )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def format_generate_graph(result: dict) -> str:
     """Format the result of interactive graph generation."""
     lines = [
@@ -173,3 +258,27 @@ def format_generate_graph(result: dict) -> str:
         lines.append("No architectural concerns detected.")
 
     return "\n".join(lines)
+
+
+def format_metric_graph(snap: GraphSnapshot) -> str:
+    """JSON node/edge dump from the analyzer ``GraphSnapshot`` (module graph only)."""
+    payload = {
+        "root": snap.root,
+        "nodes": [
+            {
+                "id": m.module,
+                "path": m.path,
+                "metrics": {
+                    "ca": m.ca,
+                    "ce": m.ce,
+                    "instability": m.instability,
+                    "lcom4": m.lcom4,
+                    "cc_max": m.cc_max,
+                },
+                "violations": m.violations,
+            }
+            for m in snap.modules.values()
+        ],
+        "edges": [{"from": s, "to": d} for s, d in snap.edges],
+    }
+    return json.dumps(payload, indent=2)

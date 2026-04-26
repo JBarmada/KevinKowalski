@@ -1,6 +1,6 @@
 """Kowalski-Kevin MCP server.
 
-Exposes 5 tools that let an AI coding agent query architectural metrics
+Exposes tools that let an AI coding agent query architectural metrics
 about a Python repo before/while making changes. Built against the
 Analyzer protocol in contract.py; today backed by fake_analyzer, later
 swapped for the real one with a one-line import change.
@@ -36,6 +36,7 @@ from formatters import (
     format_check_change,
     format_generate_graph,
     format_module_health,
+    format_refactor_assistance,
     format_suggest_refactor,
 )
 
@@ -87,6 +88,151 @@ def _resolve_path(path: str) -> str:
             "Pass the absolute repo path explicitly."
         )
     return os.path.abspath(path)
+
+
+def _metrics_to_dict(nm) -> dict:
+    return {
+        "ca": nm.ca,
+        "ce": nm.ce,
+        "instability": nm.instability,
+        "impact": nm.impact,
+        "susceptibility": nm.susceptibility,
+        "raw_impact": nm.raw_impact,
+        "raw_susceptibility": nm.raw_susceptibility,
+    }
+
+
+def _display_node_id(nid: str, metadata: dict | None) -> str:
+    if not metadata:
+        return nid
+    meta = metadata.get(nid) or {}
+    label, path = meta.get("label"), meta.get("file_path")
+    if label and path is not None and "line" in meta:
+        return f"{label} (`{path}`:{meta['line']})"
+    return nid
+
+
+def _refactor_level_block(
+    graph: nx.DiGraph,
+    metrics: dict,
+    *,
+    metadata: dict | None = None,
+    top_sus: int = 5,
+    top_imp: int = 5,
+    neighbor_cap: int = 3,
+) -> dict:
+    """Package/file/function slice for ``format_refactor_assistance``."""
+    if graph.number_of_nodes() == 0 or not metrics:
+        return {
+            "node_count": 0,
+            "edge_count": 0,
+            "high_susceptibility_detail": [],
+            "high_impact_detail": [],
+        }
+
+    nodes = list(graph.nodes())
+    by_susc = sorted(nodes, key=lambda n: metrics[n].raw_susceptibility, reverse=True)[:top_sus]
+    by_imp = sorted(nodes, key=lambda n: metrics[n].raw_impact, reverse=True)[:top_imp]
+
+    sus_detail = []
+    for nid in by_susc:
+        preds = sorted(
+            list(graph.predecessors(nid)),
+            key=lambda p: metrics[p].raw_impact,
+            reverse=True,
+        )[:neighbor_cap]
+        sus_detail.append(
+            {
+                "id": _display_node_id(nid, metadata),
+                "metrics": _metrics_to_dict(metrics[nid]),
+                "high_impact_dependents": [
+                    {"id": _display_node_id(p, metadata), **_metrics_to_dict(metrics[p])}
+                    for p in preds
+                ],
+            }
+        )
+
+    imp_detail = []
+    for nid in by_imp:
+        succs = sorted(
+            list(graph.successors(nid)),
+            key=lambda s: metrics[s].raw_susceptibility,
+            reverse=True,
+        )[:neighbor_cap]
+        imp_detail.append(
+            {
+                "id": _display_node_id(nid, metadata),
+                "metrics": _metrics_to_dict(metrics[nid]),
+                "high_susceptibility_dependencies": [
+                    {"id": _display_node_id(s, metadata), **_metrics_to_dict(metrics[s])}
+                    for s in succs
+                ],
+            }
+        )
+
+    return {
+        "node_count": graph.number_of_nodes(),
+        "edge_count": graph.number_of_edges(),
+        "high_susceptibility_detail": sus_detail,
+        "high_impact_detail": imp_detail,
+    }
+
+
+def _build_graph_metrics_bundle(source_root: Path) -> dict:
+    """Same graphs/metrics as ``generate_graph`` / the interactive visualization."""
+    edges, all_modules = parse_edges(source_root)
+
+    file_graph = nx.DiGraph()
+    file_edge_types: dict[tuple[str, str], bool] = {}
+    for module in all_modules:
+        file_graph.add_node(module)
+    for edge in edges:
+        file_graph.add_edge(edge.src, edge.dst)
+        file_edge_types[(edge.src, edge.dst)] = edge.is_dynamic
+
+    file_metrics = compute_metrics(file_graph)
+    file_cycle_nodes, file_cycle_edges = find_cycle_info(file_graph)
+
+    pkg_edges = aggregate_to_packages(edges)
+    package_graph = nx.DiGraph()
+    pkg_names = {m.split(".")[0] for m in all_modules}
+    for pkg in pkg_names:
+        package_graph.add_node(pkg)
+    for edge in pkg_edges:
+        package_graph.add_edge(edge.src, edge.dst)
+
+    package_metrics = compute_metrics(package_graph)
+    package_cycle_nodes, package_cycle_edges = find_cycle_info(package_graph)
+
+    try:
+        function_graph, function_metadata = build_function_graph(source_root)
+    except Exception as e:
+        log.warning("Function graph generation failed: %s", e)
+        function_graph = nx.DiGraph()
+        function_metadata = {}
+
+    function_metrics = compute_metrics(function_graph)
+    function_cycle_nodes, function_cycle_edges = find_cycle_info(function_graph)
+
+    return {
+        "source_root": source_root,
+        "edges": edges,
+        "all_modules": all_modules,
+        "file_graph": file_graph,
+        "file_edge_types": file_edge_types,
+        "file_metrics": file_metrics,
+        "file_cycle_nodes": file_cycle_nodes,
+        "file_cycle_edges": file_cycle_edges,
+        "package_graph": package_graph,
+        "package_metrics": package_metrics,
+        "package_cycle_nodes": package_cycle_nodes,
+        "package_cycle_edges": package_cycle_edges,
+        "function_graph": function_graph,
+        "function_metadata": function_metadata,
+        "function_metrics": function_metrics,
+        "function_cycle_nodes": function_cycle_nodes,
+        "function_cycle_edges": function_cycle_edges,
+    }
 
 
 @mcp.tool()
@@ -167,6 +313,46 @@ def check_change(path: str, files: list[str]) -> str:
 
 @mcp.tool()
 @_safe_tool
+def refactor_assistance(path: str) -> str:
+    """Ca/Ce-focused refactor brief using the same graphs as the visualizer.
+
+    Returns Markdown with **package**, **file/module**, and **function** levels.
+    Each layer lists Ca, Ce, instability, impact, and susceptibility (normalized
+    and raw), plus targeted neighbor context: for high-susceptibility nodes, the
+    heaviest **impact** dependents (predecessors); for high-impact nodes, the
+    most **susceptible** dependencies (successors). Use this to plan decoupling:
+    shrink high-impact fan-in onto susceptible hubs, and trim high-susceptibility
+    fan-out from impact-heavy modules.
+
+    Args:
+        path: Absolute filesystem path to the repo root. Required.
+    """
+    repo = _resolve_path(path)
+    log.info("refactor_assistance: %s", repo)
+    bundle = _build_graph_metrics_bundle(Path(repo))
+    payload = {
+        "root": repo,
+        "levels": {
+            "package": _refactor_level_block(
+                bundle["package_graph"],
+                bundle["package_metrics"],
+            ),
+            "file": _refactor_level_block(
+                bundle["file_graph"],
+                bundle["file_metrics"],
+            ),
+            "function": _refactor_level_block(
+                bundle["function_graph"],
+                bundle["function_metrics"],
+                metadata=bundle["function_metadata"],
+            ),
+        },
+    }
+    return format_refactor_assistance(payload)
+
+
+@mcp.tool()
+@_safe_tool
 def generate_graph(path: str, output: str = "") -> str:
     """Generate an interactive HTML dependency graph for a Python repo.
 
@@ -191,59 +377,33 @@ def generate_graph(path: str, output: str = "") -> str:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    edges, all_modules = parse_edges(source_root)
-
-    file_graph = nx.DiGraph()
-    file_edge_types: dict[tuple[str, str], bool] = {}
-    for module in all_modules:
-        file_graph.add_node(module)
-    for edge in edges:
-        file_graph.add_edge(edge.src, edge.dst)
-        file_edge_types[(edge.src, edge.dst)] = edge.is_dynamic
-
-    file_metrics = compute_metrics(file_graph)
-    file_cycle_nodes, file_cycle_edges = find_cycle_info(file_graph)
-
-    pkg_edges = aggregate_to_packages(edges)
-    package_graph = nx.DiGraph()
-    pkg_names = {m.split(".")[0] for m in all_modules}
-    for pkg in pkg_names:
-        package_graph.add_node(pkg)
-    for edge in pkg_edges:
-        package_graph.add_edge(edge.src, edge.dst)
-
-    package_metrics = compute_metrics(package_graph)
-    package_cycle_nodes, package_cycle_edges = find_cycle_info(package_graph)
-
-    try:
-        function_graph, function_metadata = build_function_graph(source_root)
-    except Exception as e:
-        log.warning("Function graph generation failed: %s", e)
-        function_graph = nx.DiGraph()
-        function_metadata = {}
-
-    function_metrics = compute_metrics(function_graph)
-    function_cycle_nodes, function_cycle_edges = find_cycle_info(function_graph)
+    bundle = _build_graph_metrics_bundle(source_root)
 
     generate_interactive_graph(
-        package_graph=package_graph,
-        file_graph=file_graph,
-        function_graph=function_graph,
-        file_edge_types=file_edge_types,
-        package_metrics=package_metrics,
-        file_metrics=file_metrics,
-        function_metrics=function_metrics,
-        file_cycle_nodes=file_cycle_nodes,
-        file_cycle_edges=file_cycle_edges,
-        package_cycle_nodes=package_cycle_nodes,
-        package_cycle_edges=package_cycle_edges,
-        function_cycle_nodes=function_cycle_nodes,
-        function_cycle_edges=function_cycle_edges,
-        function_metadata=function_metadata,
+        package_graph=bundle["package_graph"],
+        file_graph=bundle["file_graph"],
+        function_graph=bundle["function_graph"],
+        file_edge_types=bundle["file_edge_types"],
+        package_metrics=bundle["package_metrics"],
+        file_metrics=bundle["file_metrics"],
+        function_metrics=bundle["function_metrics"],
+        file_cycle_nodes=bundle["file_cycle_nodes"],
+        file_cycle_edges=bundle["file_cycle_edges"],
+        package_cycle_nodes=bundle["package_cycle_nodes"],
+        package_cycle_edges=bundle["package_cycle_edges"],
+        function_cycle_nodes=bundle["function_cycle_nodes"],
+        function_cycle_edges=bundle["function_cycle_edges"],
+        function_metadata=bundle["function_metadata"],
         source_root=source_root,
         output_path=output_path,
         open_browser=False,
     )
+
+    file_graph = bundle["file_graph"]
+    file_metrics = bundle["file_metrics"]
+    package_graph = bundle["package_graph"]
+    function_graph = bundle["function_graph"]
+    file_cycle_nodes = bundle["file_cycle_nodes"]
 
     high_impact = [n for n, m in file_metrics.items() if m.impact > 0.7]
     high_suscept = [n for n, m in file_metrics.items() if m.susceptibility > 0.7]

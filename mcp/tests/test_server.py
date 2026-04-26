@@ -1,12 +1,11 @@
 """Tier 3: MCP server smoke tests.
 
-Loads the FastMCP instance in-process and verifies all 5 tools register
+Loads the FastMCP instance in-process and verifies all tools register
 and execute through the MCP machinery (not just as plain functions).
 Analyzer-agnostic -- survives the swap.
 """
 
 import asyncio
-import json
 
 import pytest
 
@@ -18,7 +17,8 @@ EXPECTED_TOOLS = {
     "module_health",
     "suggest_refactor",
     "check_change",
-    "get_metric_graph",
+    "generate_graph",
+    "refactor_assistance",
 }
 
 
@@ -38,7 +38,7 @@ def _call_tool(name: str, args: dict) -> str:
     return "\n".join(parts)
 
 
-def test_all_five_tools_register():
+def test_all_tools_register():
     names = {t.name for t in _list_tools()}
     assert names == EXPECTED_TOOLS, f"got {names}"
 
@@ -70,10 +70,15 @@ def test_check_change_returns_string():
     assert isinstance(out, str) and out
 
 
-def test_get_metric_graph_returns_valid_json():
-    out = _call_tool("get_metric_graph", {"path": "/tmp/fake-repo"})
-    parsed = json.loads(out)
-    assert "nodes" in parsed and "edges" in parsed
+def test_generate_graph_returns_string():
+    out = _call_tool("generate_graph", {"path": "/tmp/fake-repo"})
+    assert isinstance(out, str) and out
+
+
+def test_refactor_assistance_returns_string():
+    out = _call_tool("refactor_assistance", {"path": "/tmp/fake-repo"})
+    assert isinstance(out, str) and out
+    assert "Refactor assistance" in out or "refactor" in out.lower()
 
 
 def test_dot_path_rejected_with_helpful_message():
