@@ -13,13 +13,36 @@ the swap.
 from contract import Analyzer, GraphSnapshot, ModuleMetrics
 
 
+# Edges drive Ca/Ce. Metrics below are derived from these to stay self-consistent;
+# if you change either, recompute the other.
+_FAKE_EDGES: list[tuple[str, str]] = [
+    # web layer imports handlers (gives handlers.user a healthy Ca)
+    ("web.routes", "handlers.user"),
+    ("web.routes", "handlers.billing"),
+    ("web.middleware", "handlers.user"),
+    ("web.api", "handlers.user"),
+    # handlers depend on db + utils
+    ("handlers.user", "db.session"),
+    ("handlers.user", "db.models"),
+    ("handlers.user", "utils.logging"),
+    ("handlers.billing", "db.session"),
+    ("handlers.billing", "db.models"),
+    ("handlers.billing", "utils.logging"),
+    # db.session is unstable (depends on lots) but depended on by stable billing -> SDP
+    ("db.session", "db.models"),
+    ("db.session", "utils.logging"),
+    ("db.session", "utils.config"),
+    ("db.session", "utils.errors"),
+]
+
+
 _FAKE_MODULES: dict[str, ModuleMetrics] = {
     "handlers.user": ModuleMetrics(
         module="handlers.user",
         path="handlers/user.py",
-        ca=8,
-        ce=12,
-        instability=0.60,
+        ca=3,
+        ce=3,
+        instability=0.50,
         lcom4=4.0,
         cc_max=21,
         violations=["GOD_MODULE", "HIGH_CC"],
@@ -27,9 +50,9 @@ _FAKE_MODULES: dict[str, ModuleMetrics] = {
     "handlers.billing": ModuleMetrics(
         module="handlers.billing",
         path="handlers/billing.py",
-        ca=2,
-        ce=8,
-        instability=0.80,
+        ca=1,
+        ce=3,
+        instability=0.75,
         lcom4=2.0,
         cc_max=9,
         violations=[],
@@ -37,19 +60,19 @@ _FAKE_MODULES: dict[str, ModuleMetrics] = {
     "db.session": ModuleMetrics(
         module="db.session",
         path="db/session.py",
-        ca=1,
-        ce=9,
-        instability=0.90,
+        ca=2,
+        ce=4,
+        instability=0.67,
         lcom4=1.0,
         cc_max=6,
-        violations=["SDP"],  # unstable but depended on by stable billing
+        violations=["SDP"],  # I=0.67, depended on by stable handlers.billing/user
     ),
     "db.models": ModuleMetrics(
         module="db.models",
         path="db/models.py",
-        ca=6,
-        ce=1,
-        instability=0.14,
+        ca=3,
+        ce=0,
+        instability=0.0,
         lcom4=1.0,
         cc_max=4,
         violations=[],
@@ -57,11 +80,61 @@ _FAKE_MODULES: dict[str, ModuleMetrics] = {
     "utils.logging": ModuleMetrics(
         module="utils.logging",
         path="utils/logging.py",
-        ca=4,
+        ca=3,
         ce=0,
         instability=0.0,
         lcom4=None,
         cc_max=2,
+        violations=[],
+    ),
+    "utils.config": ModuleMetrics(
+        module="utils.config",
+        path="utils/config.py",
+        ca=1,
+        ce=0,
+        instability=0.0,
+        lcom4=None,
+        cc_max=1,
+        violations=[],
+    ),
+    "utils.errors": ModuleMetrics(
+        module="utils.errors",
+        path="utils/errors.py",
+        ca=1,
+        ce=0,
+        instability=0.0,
+        lcom4=None,
+        cc_max=1,
+        violations=[],
+    ),
+    "web.routes": ModuleMetrics(
+        module="web.routes",
+        path="web/routes.py",
+        ca=0,
+        ce=2,
+        instability=1.0,
+        lcom4=None,
+        cc_max=3,
+        violations=[],
+    ),
+    "web.middleware": ModuleMetrics(
+        module="web.middleware",
+        path="web/middleware.py",
+        ca=0,
+        ce=1,
+        instability=1.0,
+        lcom4=None,
+        cc_max=2,
+        violations=[],
+    ),
+    "web.api": ModuleMetrics(
+        module="web.api",
+        path="web/api.py",
+        ca=0,
+        ce=1,
+        instability=1.0,
+        lcom4=None,
+        cc_max=4,
         violations=[],
     ),
     "events.bus": ModuleMetrics(
@@ -75,17 +148,6 @@ _FAKE_MODULES: dict[str, ModuleMetrics] = {
         violations=[],
     ),
 }
-
-_FAKE_EDGES: list[tuple[str, str]] = [
-    ("handlers.user", "db.session"),
-    ("handlers.user", "db.models"),
-    ("handlers.user", "utils.logging"),
-    ("handlers.billing", "db.session"),
-    ("handlers.billing", "db.models"),
-    ("handlers.billing", "utils.logging"),
-    ("db.session", "db.models"),
-    ("db.session", "utils.logging"),
-]
 
 
 class FakeAnalyzer:
