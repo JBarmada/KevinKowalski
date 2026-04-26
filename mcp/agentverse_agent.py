@@ -105,7 +105,10 @@ def _resolve_repo(path_or_url: str) -> tuple[str, str | None]:
         repo_slug = match.group(1)
         repo_slug = re.sub(r'\.git$', '', repo_slug)
         clone_url = f"https://github.com/{repo_slug}.git"
-        tmp_dir = tempfile.mkdtemp(prefix="kowalski_")
+        # Embed owner_repo in the temp-dir name so concurrent clones are
+        # distinguishable on disk (e.g. `kowalski_pallets_flask_xyz123`).
+        slug_safe = re.sub(r"[^\w.-]", "_", repo_slug)
+        tmp_dir = tempfile.mkdtemp(prefix=f"kowalski_{slug_safe}_")
         repo_dir = os.path.join(tmp_dir, "repo")
         log.info("Cloning %s into %s", clone_url, repo_dir)
         try:
