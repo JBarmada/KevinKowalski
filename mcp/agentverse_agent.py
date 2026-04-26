@@ -583,10 +583,19 @@ def _generate_graph_for_path(repo_path: str) -> str:
 # Tool dispatcher
 # ---------------------------------------------------------------------------
 
-def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
-    """Execute a KevinKowalski tool and return the Markdown result."""
+
+class ToolError(Exception):
+    """Raised by _run_tool_strict when a tool invocation fails."""
+
+
+def _run_tool_strict(tool_name: str, path_or_url: str, arg: str) -> str:
+    """Execute a KevinKowalski tool and return the Markdown result.
+
+    Raises ToolError on any failure so callers can route errors to typed
+    error responses (e.g. AnalysisErrorMessage).
+    """
     if not path_or_url or path_or_url in (".", "./"):
-        return (
+        raise ToolError(
             "I need a GitHub repo URL or absolute path to analyze. "
             "For example: 'analyze https://github.com/pallets/flask' "
             "or 'analyze /home/user/my-python-project'"
@@ -602,7 +611,10 @@ def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
 
         elif tool_name == "module_health":
             if not arg:
-                return "Please specify a module name, e.g.: 'check health of handlers.user in https://github.com/user/repo'"
+                raise ToolError(
+                    "Please specify a module name, e.g.: "
+                    "'check health of handlers.user in https://github.com/user/repo'"
+                )
             snapshot = analyzer.analyze(path)
             return format_module_health(snapshot, arg)
 
@@ -615,7 +627,10 @@ def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
         elif tool_name == "check_change":
             files = [f.strip() for f in arg.split(",") if f.strip()] if arg else []
             if not files:
-                return "Please specify which files changed, e.g.: 'check changes to handlers/user.py in https://github.com/user/repo'"
+                raise ToolError(
+                    "Please specify which files changed, e.g.: "
+                    "'check changes to handlers/user.py in https://github.com/user/repo'"
+                )
             result = analyzer.incremental_check(path, files)
             return format_check_change(result)
 
@@ -697,13 +712,27 @@ def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
             return _generate_graph_for_path(path)
 
         else:
-            return f"Unknown tool: {tool_name}. Available: analyze_repo, module_health, suggest_refactor, check_change, refactor_assistance, generate_graph"
+            raise ToolError(
+                f"Unknown tool: {tool_name}. Available: analyze_repo, "
+                "module_health, suggest_refactor, check_change, "
+                "refactor_assistance, generate_graph"
+            )
 
+    except ToolError:
+        raise
     except Exception as e:
-        return f"Failed to process repository: {type(e).__name__}: {e}"
+        raise ToolError(f"Failed to process repository: {type(e).__name__}: {e}") from e
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
+    """String-returning wrapper for the chat protocol (never raises)."""
+    try:
+        return _run_tool_strict(tool_name, path_or_url, arg)
+    except ToolError as e:
+        return str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -828,12 +857,20 @@ class CheckChangeResponse(Model):
     markdown: str
 
 
-class GetMetricGraphRequest(Model):
+class RefactorAssistanceRequest(Model):
     path: str
 
 
-class GetMetricGraphResponse(Model):
-    json_graph: str
+class RefactorAssistanceResponse(Model):
+    markdown: str
+
+
+class GenerateGraphRequest(Model):
+    path: str
+
+
+class GenerateGraphResponse(Model):
+    markdown: str
 
 
 class AnalysisErrorMessage(Model):
@@ -847,55 +884,66 @@ analysis_protocol = Protocol(name="KevinKowalski-Analysis", version="0.1.0")
 async def handle_analyze_repo(ctx: Context, sender: str, msg: AnalyzeRepoRequest):
     ctx.logger.info("AnalyzeRepoRequest from %s path=%s", sender, msg.path)
     try:
-        result = _run_tool("analyze_repo", msg.path, "")
+        result = _run_tool_strict("analyze_repo", msg.path, "")
         await ctx.send(sender, AnalyzeRepoResponse(markdown=result))
-    except Exception as e:
-        ctx.logger.exception("analyze_repo failed")
-        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+    except ToolError as e:
+        ctx.logger.warning("analyze_repo error: %s", e)
+        await ctx.send(sender, AnalysisErrorMessage(error=str(e)))
 
 
 @analysis_protocol.on_message(ModuleHealthRequest)
 async def handle_module_health(ctx: Context, sender: str, msg: ModuleHealthRequest):
     ctx.logger.info("ModuleHealthRequest from %s path=%s module=%s", sender, msg.path, msg.module)
     try:
-        result = _run_tool("module_health", msg.path, msg.module)
+        result = _run_tool_strict("module_health", msg.path, msg.module)
         await ctx.send(sender, ModuleHealthResponse(markdown=result))
-    except Exception as e:
-        ctx.logger.exception("module_health failed")
-        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+    except ToolError as e:
+        ctx.logger.warning("module_health error: %s", e)
+        await ctx.send(sender, AnalysisErrorMessage(error=str(e)))
 
 
 @analysis_protocol.on_message(SuggestRefactorRequest)
 async def handle_suggest_refactor(ctx: Context, sender: str, msg: SuggestRefactorRequest):
     ctx.logger.info("SuggestRefactorRequest from %s path=%s", sender, msg.path)
     try:
-        result = _run_tool("suggest_refactor", msg.path, msg.feature_description)
+        result = _run_tool_strict("suggest_refactor", msg.path, msg.feature_description)
         await ctx.send(sender, SuggestRefactorResponse(markdown=result))
-    except Exception as e:
-        ctx.logger.exception("suggest_refactor failed")
-        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+    except ToolError as e:
+        ctx.logger.warning("suggest_refactor error: %s", e)
+        await ctx.send(sender, AnalysisErrorMessage(error=str(e)))
 
 
 @analysis_protocol.on_message(CheckChangeRequest)
 async def handle_check_change(ctx: Context, sender: str, msg: CheckChangeRequest):
     ctx.logger.info("CheckChangeRequest from %s path=%s files=%s", sender, msg.path, msg.files)
     try:
-        result = _run_tool("check_change", msg.path, ",".join(msg.files))
+        result = _run_tool_strict("check_change", msg.path, ",".join(msg.files))
         await ctx.send(sender, CheckChangeResponse(markdown=result))
-    except Exception as e:
-        ctx.logger.exception("check_change failed")
-        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+    except ToolError as e:
+        ctx.logger.warning("check_change error: %s", e)
+        await ctx.send(sender, AnalysisErrorMessage(error=str(e)))
 
 
-@analysis_protocol.on_message(GetMetricGraphRequest)
-async def handle_get_metric_graph(ctx: Context, sender: str, msg: GetMetricGraphRequest):
-    ctx.logger.info("GetMetricGraphRequest from %s path=%s", sender, msg.path)
+@analysis_protocol.on_message(RefactorAssistanceRequest)
+async def handle_refactor_assistance(ctx: Context, sender: str, msg: RefactorAssistanceRequest):
+    ctx.logger.info("RefactorAssistanceRequest from %s path=%s", sender, msg.path)
     try:
-        result = _run_tool("get_metric_graph", msg.path, "")
-        await ctx.send(sender, GetMetricGraphResponse(json_graph=result))
-    except Exception as e:
-        ctx.logger.exception("get_metric_graph failed")
-        await ctx.send(sender, AnalysisErrorMessage(error=f"{type(e).__name__}: {e}"))
+        result = _run_tool_strict("refactor_assistance", msg.path, "")
+        await ctx.send(sender, RefactorAssistanceResponse(markdown=result))
+    except ToolError as e:
+        ctx.logger.warning("refactor_assistance error: %s", e)
+        await ctx.send(sender, AnalysisErrorMessage(error=str(e)))
+
+
+@analysis_protocol.on_message(GenerateGraphRequest)
+async def handle_generate_graph(ctx: Context, sender: str, msg: GenerateGraphRequest):
+    ctx.logger.info("GenerateGraphRequest from %s path=%s", sender, msg.path)
+    try:
+        result = _run_tool_strict("generate_graph", msg.path, "")
+        await ctx.send(sender, GenerateGraphResponse(markdown=result))
+    except ToolError as e:
+        ctx.logger.warning("generate_graph error: %s", e)
+        await ctx.send(sender, AnalysisErrorMessage(error=str(e)))
 
 
 agent.include(protocol, publish_manifest=True)
