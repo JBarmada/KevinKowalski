@@ -5,6 +5,7 @@ imports, and renders a directed dependency graph: an edge A -> B means module A
 imports from module B.
 """
 
+import argparse
 import ast
 from pathlib import Path
 
@@ -126,9 +127,15 @@ def parse_edges_v2(source_root: Path) -> list[tuple[str, str]]:
     return unique
 
 
+# === Main ===
+
+parser = argparse.ArgumentParser(description="Visualize import-level coupling across Python modules.")
+parser.add_argument("source_dir", type=Path, help="Directory of Python source files to analyze.")
+args = parser.parse_args()
+
 # === Build graph ===
 
-source_root = Path("src/flask")
+source_root = args.source_dir
 edges = parse_edges_v2(source_root)
 
 graph = nx.DiGraph()
