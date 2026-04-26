@@ -133,14 +133,14 @@ def _get_orbital_vis_options() -> dict:
         "edges": {
             "arrows": {"to": {"enabled": True, "scaleFactor": 0.5}},
             "smooth": {"type": "continuous", "roundness": 0.2},
-            "color": {"color": "#999999", "opacity": 0.7},
+            "color": {"color": "#dddddd", "opacity": 0.85},
         },
         "layout": {"hierarchical": {"enabled": False}},
         "physics": {
             "enabled": True,
             "barnesHut": {
                 "gravitationalConstant": -5000,
-                "centralGravity": 0.15,
+                "centralGravity": 0.05,
                 "springLength": 250,
                 "springConstant": 0.01,
                 "damping": 0.3,
@@ -175,6 +175,7 @@ def _inject_enhancements(
                 node: {
                     "impact": m.impact,
                     "susceptibility": m.susceptibility,
+                    "instability": m.instability,
                     "ca": m.ca,
                     "ce": m.ce,
                     "raw_impact": m.raw_impact,
@@ -263,6 +264,11 @@ def _inject_enhancements(
       <span style="display: inline-block; width: 20px; border-top: 2px dashed #999;"></span>
       <span>Dynamic import</span>
     </div>
+    <div id="size-legend-note" style="margin-top: 6px; font-style: italic;">Node size = Susceptibility</div>
+    <div id="holistic-guide" style="margin-top: 8px; line-height: 1.5; color: #aaa;">
+      <span style="color: #d9731a;">&#9679;</span> Brown (central) = trunk — avoid editing<br>
+      <span style="color: #4de64d;">&#9679;</span> Green (peripheral) = leaves — safe to edit
+    </div>
   </div>
   <div style="font-size: 10px; color: #888; border-top: 1px solid #444; padding-top: 10px; margin-top: 8px;">
     <div style="font-weight: 600; margin-bottom: 6px; color: #999;">Controls</div>
@@ -341,7 +347,10 @@ div.vis-network div.vis-navigation div.vis-button:active {
     function getNodeSize(nodeId) {{
         var m = allMetrics[currentView] && allMetrics[currentView][nodeId];
         if (!m) return 15;
-        return 10 + m.impact * 35;
+        if (currentColorMode === 'default') {{
+            return 10 + m.susceptibility * 35;
+        }}
+        return 10 + (1 - m.instability) * 35;
     }}
 
     function loadView(viewName) {{
@@ -374,8 +383,8 @@ div.vis-network div.vis-navigation div.vis-button:active {
             newEdges.push({{
                 from: e.from,
                 to: e.to,
-                color: {{ color: e.color || '#999999', opacity: 0.7 }},
-                width: e.width || 1,
+                color: {{ color: e.color || '#dddddd', opacity: 0.85 }},
+                width: e.width || 1.5,
                 dashes: e.dashes || false,
                 arrows: 'to',
                 title: e.title || ''
@@ -481,10 +490,19 @@ div.vis-network div.vis-navigation div.vis-button:active {
         edges.forEach(function(e) {{
             edges.update({{
                 id: e.id,
-                color: {{ color: '#999999', opacity: 0.7 }},
-                width: 1
+                color: {{ color: '#dddddd', opacity: 0.85 }},
+                width: 1.5
             }});
         }});
+
+        var sizeNote = document.getElementById('size-legend-note');
+        if (sizeNote) {{
+            sizeNote.textContent = mode === 'default' ? 'Node size = Susceptibility' : 'Node size = Stability';
+        }}
+        var holisticGuide = document.getElementById('holistic-guide');
+        if (holisticGuide) {{
+            holisticGuide.style.display = mode === 'default' ? 'block' : 'none';
+        }}
     }};
 
     window.resetView = function() {{
@@ -646,8 +664,8 @@ def _build_graph_json(
         is_dynamic = edge_types.get((src, dst), False) if edge_types else False
         is_cycle_edge = (src, dst) in cycle_edges
 
-        edge_color = "#ff4444" if is_cycle_edge else "#999999"
-        edge_width = 1.5 if is_cycle_edge else 1
+        edge_color = "#ff4444" if is_cycle_edge else "#dddddd"
+        edge_width = 2 if is_cycle_edge else 1.5
 
         edges_json.append({
             "from": src,
@@ -727,7 +745,7 @@ def generate_interactive_graph(
         if not m:
             continue
         color_hex = holistic_color(m.impact)
-        size = 10 + m.impact * 35
+        size = 10 + m.susceptibility * 35
 
         node_opts = {
             "label": node_data["label"],
