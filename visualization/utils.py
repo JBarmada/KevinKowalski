@@ -29,7 +29,8 @@ class _ImportVisitor(ast.NodeVisitor):
     """AST visitor that collects imports with dynamic/static classification."""
 
     def __init__(self) -> None:
-        self.imports: list[tuple[ast.ImportFrom, bool]] = []
+        self.import_froms: list[tuple[ast.ImportFrom, bool]] = []
+        self.imports: list[tuple[ast.Import, bool]] = []
         self._function_depth = 0
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -40,9 +41,12 @@ class _ImportVisitor(ast.NodeVisitor):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if node.level > 0:  # relative import only
-            is_dynamic = self._function_depth > 0
-            self.imports.append((node, is_dynamic))
+        is_dynamic = self._function_depth > 0
+        self.import_froms.append((node, is_dynamic))
+
+    def visit_Import(self, node: ast.Import) -> None:
+        is_dynamic = self._function_depth > 0
+        self.imports.append((node, is_dynamic))
 
 
 def _module_name(filepath: Path, source_root: Path) -> tuple[str, bool]:
@@ -80,11 +84,26 @@ def parse_edges(source_root: Path) -> list[Edge]:
     """Parse all Python files under source_root and extract dependency edges.
 
     Detects:
+    - Relative imports (from .x import y)
+    - Absolute/local imports (import x, from x import y) for modules in source_root
     - Static imports (module-level)
     - Dynamic imports (inside functions)
     - Excludes TYPE_CHECKING-guarded imports
     """
     edges: list[Edge] = []
+
+    # First pass: collect all local module names
+    local_modules: set[str] = set()
+    for filepath in sorted(source_root.rglob("*.py")):
+        try:
+            module, _ = _module_name(filepath, source_root)
+            local_modules.add(module)
+            # Also add all parent packages
+            parts = module.split(".")
+            for i in range(1, len(parts)):
+                local_modules.add(".".join(parts[:i]))
+        except ValueError:
+            continue
 
     for filepath in sorted(source_root.rglob("*.py")):
         try:
@@ -99,32 +118,67 @@ def parse_edges(source_root: Path) -> list[Edge]:
         visitor = _ImportVisitor()
         visitor.visit(tree)
 
-        for node, is_dynamic in visitor.imports:
+        # Handle ImportFrom nodes (both relative and absolute)
+        for node, is_dynamic in visitor.import_froms:
             if id(node) in tc_ids:
                 continue
 
-            # For __init__.py, the module IS the package, so don't go up for level=1
-            # Special case: root __init__.py has module name "__init__" but should resolve as ""
-            if module == "__init__":
-                package_parts = []
-            else:
-                package_parts = module.split(".")
+            if node.level > 0:
+                # Relative import
+                if module == "__init__":
+                    package_parts = []
+                else:
+                    package_parts = module.split(".")
 
-            effective_level = node.level - 1 if is_package else node.level
-            if effective_level <= 0:
-                parent_parts = package_parts
-            else:
-                parent_parts = package_parts[:-effective_level] if len(package_parts) >= effective_level else []
+                effective_level = node.level - 1 if is_package else node.level
+                if effective_level <= 0:
+                    parent_parts = package_parts
+                else:
+                    parent_parts = package_parts[:-effective_level] if len(package_parts) >= effective_level else []
 
-            if node.module:
-                target = ".".join(parent_parts + node.module.split("."))
-                if target and target != module:
-                    edges.append(Edge(module, target, is_dynamic))
-            else:
-                for alias in node.names:
-                    target = ".".join(parent_parts + [alias.name])
+                if node.module:
+                    target = ".".join(parent_parts + node.module.split("."))
                     if target and target != module:
                         edges.append(Edge(module, target, is_dynamic))
+                else:
+                    for alias in node.names:
+                        target = ".".join(parent_parts + [alias.name])
+                        if target and target != module:
+                            edges.append(Edge(module, target, is_dynamic))
+            else:
+                # Absolute import (from x import y) - check if x is a local module
+                if node.module:
+                    # Check if the module or any prefix is local
+                    target = node.module
+                    if target in local_modules and target != module:
+                        edges.append(Edge(module, target, is_dynamic))
+                    else:
+                        # Check if importing from a local module (e.g., from player import Player)
+                        for alias in node.names:
+                            candidate = f"{target}.{alias.name}" if target else alias.name
+                            if candidate in local_modules and candidate != module:
+                                edges.append(Edge(module, candidate, is_dynamic))
+                else:
+                    # from . import x style with level=0 shouldn't happen, but handle anyway
+                    for alias in node.names:
+                        if alias.name in local_modules and alias.name != module:
+                            edges.append(Edge(module, alias.name, is_dynamic))
+
+        # Handle Import nodes (import x, import x.y)
+        for node, is_dynamic in visitor.imports:
+            for alias in node.names:
+                target = alias.name
+                # Check if target or any prefix is a local module
+                if target in local_modules and target != module:
+                    edges.append(Edge(module, target, is_dynamic))
+                else:
+                    # Check prefixes (e.g., import player.utils -> player might be local)
+                    parts = target.split(".")
+                    for i in range(1, len(parts) + 1):
+                        prefix = ".".join(parts[:i])
+                        if prefix in local_modules and prefix != module:
+                            edges.append(Edge(module, prefix, is_dynamic))
+                            break
 
     # Deduplicate, preferring static over dynamic when both exist
     edge_map: dict[tuple[str, str], bool] = {}
