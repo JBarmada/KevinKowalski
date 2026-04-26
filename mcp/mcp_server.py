@@ -60,15 +60,26 @@ def _safe_tool(fn):
 
 
 def _resolve_path(path: str) -> str:
-    """Normalize the path arg. Empty/'.' becomes the agent's CWD."""
-    if not path or path == ".":
-        return os.getcwd()
+    """Normalize the path arg.
+
+    `.` and empty strings are rejected: when the MCP server is launched by a
+    host like Claude Code, os.getcwd() is the host's launch directory (often
+    C:\\WINDOWS\\System32), not the user's repo. Forcing an explicit path
+    eliminates a whole class of "I analyzed the wrong directory" bugs.
+    """
+    if not path or path in (".", "./"):
+        raise ValueError(
+            "path must be an absolute path to the repo to analyze. "
+            "'.' is rejected because the MCP server's CWD is the host's "
+            "launch directory (e.g. System32), not your project. "
+            "Pass the absolute repo path explicitly."
+        )
     return os.path.abspath(path)
 
 
 @mcp.tool()
 @_safe_tool
-def analyze_repo(path: str = ".") -> str:
+def analyze_repo(path: str) -> str:
     """Run a full architectural analysis of a Python repo.
 
     Returns a Markdown summary: module count, edge count, average instability,
@@ -76,7 +87,9 @@ def analyze_repo(path: str = ".") -> str:
     refactoring or feature work.
 
     Args:
-        path: Filesystem path to the repo root. Defaults to current directory.
+        path: Absolute filesystem path to the repo root. Required -- '.' and
+            empty strings are rejected because the MCP server's CWD is the
+            host's launch dir, not the user's project.
     """
     repo = _resolve_path(path)
     log.info("analyze_repo: %s", repo)
@@ -142,14 +155,15 @@ def check_change(path: str, files: list[str]) -> str:
 
 @mcp.tool()
 @_safe_tool
-def get_metric_graph(path: str = ".") -> str:
+def get_metric_graph(path: str) -> str:
     """Return the metric graph as JSON (nodes + edges) for visualization.
 
     Same shape consumed by the upcoming graph viewer. Useful when an agent or
     UI wants raw data instead of formatted prose.
 
     Args:
-        path: Filesystem path to the repo root. Defaults to current directory.
+        path: Absolute filesystem path to the repo root. Required -- '.' and
+            empty strings are rejected.
     """
     repo = _resolve_path(path)
     log.info("get_metric_graph: %s", repo)

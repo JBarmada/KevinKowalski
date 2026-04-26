@@ -51,29 +51,43 @@ def test_each_tool_has_description():
 
 
 def test_analyze_repo_returns_string():
-    out = _call_tool("analyze_repo", {"path": "."})
+    out = _call_tool("analyze_repo", {"path": "/tmp/fake-repo"})
     assert isinstance(out, str) and out
 
 
 def test_module_health_returns_string():
-    out = _call_tool("module_health", {"path": ".", "module": "handlers.user"})
+    out = _call_tool("module_health", {"path": "/tmp/fake-repo", "module": "handlers.user"})
     assert isinstance(out, str) and out
 
 
 def test_suggest_refactor_returns_string():
-    out = _call_tool("suggest_refactor", {"path": ".", "feature_description": "add audit logging"})
+    out = _call_tool("suggest_refactor", {"path": "/tmp/fake-repo", "feature_description": "add audit logging"})
     assert isinstance(out, str) and out
 
 
 def test_check_change_returns_string():
-    out = _call_tool("check_change", {"path": ".", "files": ["handlers/user.py"]})
+    out = _call_tool("check_change", {"path": "/tmp/fake-repo", "files": ["handlers/user.py"]})
     assert isinstance(out, str) and out
 
 
 def test_get_metric_graph_returns_valid_json():
-    out = _call_tool("get_metric_graph", {"path": "."})
+    out = _call_tool("get_metric_graph", {"path": "/tmp/fake-repo"})
     parsed = json.loads(out)
     assert "nodes" in parsed and "edges" in parsed
+
+
+def test_dot_path_rejected_with_helpful_message():
+    """'.' must be rejected -- the MCP server's CWD is the host's launch dir,
+    not the user's repo. The error must steer the agent to fix the call."""
+    out = _call_tool("analyze_repo", {"path": "."})
+    assert "path must be" in out.lower() or "rejected" in out.lower()
+    assert "absolute" in out.lower()
+
+
+def test_empty_path_rejected():
+    out = _call_tool("analyze_repo", {"path": ""})
+    assert "path" in out.lower()
+    assert "Error" in out or "error" in out
 
 
 def test_tool_exception_returned_as_string(monkeypatch):
@@ -82,7 +96,7 @@ def test_tool_exception_returned_as_string(monkeypatch):
     def boom(*_a, **_kw):
         raise RuntimeError("simulated analyzer failure")
     monkeypatch.setattr(mcp_server._analyzer, "analyze", boom)
-    out = _call_tool("analyze_repo", {"path": "."})
+    out = _call_tool("analyze_repo", {"path": "/tmp/fake-repo"})
     assert isinstance(out, str)
     assert "Error" in out or "error" in out
     assert "RuntimeError" in out
