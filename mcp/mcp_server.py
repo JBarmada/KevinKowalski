@@ -12,25 +12,17 @@ Never use print() in this module or anything it imports at runtime.
 
 import logging
 import os
+import re
+import subprocess
 import sys
 import traceback
 from functools import wraps
 from pathlib import Path
 
-import networkx as nx
 from fastmcp import FastMCP
 
 from real_analyzer import get_analyzer
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "visualization"))
-from render import generate_interactive_graph
-from utils import (
-    aggregate_to_packages,
-    build_function_graph,
-    compute_metrics,
-    find_cycle_info,
-    parse_edges,
-)
 from formatters import (
     format_analyze_repo,
     format_check_change,
@@ -165,6 +157,37 @@ def check_change(path: str, files: list[str]) -> str:
     return format_check_change(result)
 
 
+_REPO_ROOT = Path(__file__).parent.parent
+
+
+def _parse_viz_stdout(stdout: str, output_path: str) -> dict:
+    """Parse visualization CLI stdout into the result dict for format_generate_graph."""
+    result: dict = {"output_path": output_path}
+
+    m = re.search(r"File-level:\s*(\d+)\s*nodes,\s*(\d+)\s*edges", stdout)
+    result["file_nodes"] = int(m.group(1)) if m else 0
+    result["file_edges"] = int(m.group(2)) if m else 0
+
+    m = re.search(r"Package-level:\s*(\d+)\s*nodes,\s*(\d+)\s*edges", stdout)
+    result["package_nodes"] = int(m.group(1)) if m else 0
+    result["package_edges"] = int(m.group(2)) if m else 0
+
+    m = re.search(r"Function-level:\s*(\d+)\s*nodes,\s*(\d+)\s*edges", stdout)
+    result["function_nodes"] = int(m.group(1)) if m else 0
+    result["function_edges"] = int(m.group(2)) if m else 0
+
+    m = re.search(r"Cycles \(file\):\s*(\d+)\s*nodes", stdout)
+    result["file_cycle_count"] = int(m.group(1)) if m else 0
+
+    m = re.search(r"High impact.*?:\s*(\d+)", stdout)
+    result["high_impact_count"] = int(m.group(1)) if m else 0
+
+    m = re.search(r"High susceptibility.*?:\s*(\d+)", stdout)
+    result["high_susceptibility_count"] = int(m.group(1)) if m else 0
+
+    return result
+
+
 @mcp.tool()
 @_safe_tool
 def generate_graph(path: str, output: str = "") -> str:
@@ -178,89 +201,35 @@ def generate_graph(path: str, output: str = "") -> str:
         path: Absolute filesystem path to the repo root. Required -- '.' and
             empty strings are rejected.
         output: Optional output path for the HTML file. Defaults to
-            visualization/output/graph.html relative to the MCP server.
+            visualization/output/graph.html relative to the repo root.
     """
     repo = _resolve_path(path)
     log.info("generate_graph: %s", repo)
-    source_root = Path(repo)
 
     if output:
         output_path = Path(output)
     else:
-        output_path = Path(__file__).parent.parent / "visualization" / "output" / "graph.html"
+        output_path = _REPO_ROOT / "visualization" / "output" / "graph.html"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    edges, all_modules = parse_edges(source_root)
-
-    file_graph = nx.DiGraph()
-    file_edge_types: dict[tuple[str, str], bool] = {}
-    for module in all_modules:
-        file_graph.add_node(module)
-    for edge in edges:
-        file_graph.add_edge(edge.src, edge.dst)
-        file_edge_types[(edge.src, edge.dst)] = edge.is_dynamic
-
-    file_metrics = compute_metrics(file_graph)
-    file_cycle_nodes, file_cycle_edges = find_cycle_info(file_graph)
-
-    pkg_edges = aggregate_to_packages(edges)
-    package_graph = nx.DiGraph()
-    pkg_names = {m.split(".")[0] for m in all_modules}
-    for pkg in pkg_names:
-        package_graph.add_node(pkg)
-    for edge in pkg_edges:
-        package_graph.add_edge(edge.src, edge.dst)
-
-    package_metrics = compute_metrics(package_graph)
-    package_cycle_nodes, package_cycle_edges = find_cycle_info(package_graph)
-
-    try:
-        function_graph, function_metadata = build_function_graph(source_root)
-    except Exception as e:
-        log.warning("Function graph generation failed: %s", e)
-        function_graph = nx.DiGraph()
-        function_metadata = {}
-
-    function_metrics = compute_metrics(function_graph)
-    function_cycle_nodes, function_cycle_edges = find_cycle_info(function_graph)
-
-    generate_interactive_graph(
-        package_graph=package_graph,
-        file_graph=file_graph,
-        function_graph=function_graph,
-        file_edge_types=file_edge_types,
-        package_metrics=package_metrics,
-        file_metrics=file_metrics,
-        function_metrics=function_metrics,
-        file_cycle_nodes=file_cycle_nodes,
-        file_cycle_edges=file_cycle_edges,
-        package_cycle_nodes=package_cycle_nodes,
-        package_cycle_edges=package_cycle_edges,
-        function_cycle_nodes=function_cycle_nodes,
-        function_cycle_edges=function_cycle_edges,
-        function_metadata=function_metadata,
-        source_root=source_root,
-        output_path=output_path,
-        open_browser=False,
+    cmd = [
+        sys.executable, "-m", "visualization.generate_graph",
+        "--path", repo,
+        "--output", str(output_path),
+        "--no-browser",
+    ]
+    proc = subprocess.run(
+        cmd, cwd=str(_REPO_ROOT),
+        capture_output=True, text=True, timeout=120,
     )
 
-    high_impact = [n for n, m in file_metrics.items() if m.impact > 0.7]
-    high_suscept = [n for n, m in file_metrics.items() if m.susceptibility > 0.7]
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Visualization failed (exit {proc.returncode}): {proc.stderr.strip()}"
+        )
 
-    result = {
-        "output_path": str(output_path.resolve()),
-        "file_nodes": file_graph.number_of_nodes(),
-        "file_edges": file_graph.number_of_edges(),
-        "package_nodes": package_graph.number_of_nodes(),
-        "package_edges": package_graph.number_of_edges(),
-        "function_nodes": function_graph.number_of_nodes(),
-        "function_edges": function_graph.number_of_edges(),
-        "file_cycle_count": len(file_cycle_nodes),
-        "high_impact_count": len(high_impact),
-        "high_susceptibility_count": len(high_suscept),
-    }
-
+    result = _parse_viz_stdout(proc.stdout, str(output_path.resolve()))
     return format_generate_graph(result)
 
 

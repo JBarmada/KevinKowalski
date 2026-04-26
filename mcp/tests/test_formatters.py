@@ -5,13 +5,11 @@ structure -- never exact prose. These also survive the analyzer swap
 because they don't touch the analyzer at all.
 """
 
-import json
-
 from contract import GraphSnapshot, ModuleMetrics
 from formatters import (
     format_analyze_repo,
     format_check_change,
-    format_metric_graph,
+    format_generate_graph,
     format_module_health,
     format_suggest_refactor,
 )
@@ -131,23 +129,38 @@ def test_check_change_handles_red_verdict():
     assert "CYCLE" in out
 
 
-def test_metric_graph_returns_valid_json():
-    out = format_metric_graph(_mini_snapshot())
-    parsed = json.loads(out)  # must not raise
-    assert "nodes" in parsed and "edges" in parsed
-    assert len(parsed["nodes"]) == 3
-    assert len(parsed["edges"]) == 3
+def test_generate_graph_renders_summary():
+    result = {
+        "output_path": "/tmp/graph.html",
+        "file_nodes": 10,
+        "file_edges": 15,
+        "package_nodes": 3,
+        "package_edges": 4,
+        "function_nodes": 20,
+        "function_edges": 25,
+        "file_cycle_count": 2,
+        "high_impact_count": 1,
+        "high_susceptibility_count": 3,
+    }
+    out = format_generate_graph(result)
+    assert isinstance(out, str) and out
+    assert "10" in out  # file nodes
+    assert "15" in out  # file edges
+    assert "/tmp/graph.html" in out
 
 
-def test_metric_graph_node_shape():
-    parsed = json.loads(format_metric_graph(_mini_snapshot()))
-    node = parsed["nodes"][0]
-    assert "id" in node and "metrics" in node and "violations" in node
-    for k in ("ca", "ce", "instability", "lcom4", "cc_max"):
-        assert k in node["metrics"]
-
-
-def test_metric_graph_edge_shape():
-    parsed = json.loads(format_metric_graph(_mini_snapshot()))
-    edge = parsed["edges"][0]
-    assert "from" in edge and "to" in edge
+def test_generate_graph_no_issues():
+    result = {
+        "output_path": "/tmp/graph.html",
+        "file_nodes": 5,
+        "file_edges": 3,
+        "package_nodes": 2,
+        "package_edges": 1,
+        "function_nodes": 8,
+        "function_edges": 6,
+        "file_cycle_count": 0,
+        "high_impact_count": 0,
+        "high_susceptibility_count": 0,
+    }
+    out = format_generate_graph(result)
+    assert "no architectural concerns" in out.lower()

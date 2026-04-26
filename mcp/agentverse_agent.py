@@ -41,6 +41,7 @@ import sys
 import tempfile
 import types
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 import aiohttp
@@ -340,7 +341,7 @@ Available tools:
 2. module_health(path, module) - per-module card; ARG = dotted module name
 3. suggest_refactor(path, feature_description) - pre-feature advice; ARG = feature
 4. check_change(path, files) - delta after edits; ARG = comma-separated file list
-5. get_metric_graph(path) - JSON nodes+edges for viz
+5. generate_graph(path) - generate interactive HTML dependency graph
 
 Examples:
 - "analyze https://github.com/pallets/flask" -> TOOL:analyze_repo|PATH:https://github.com/pallets/flask|ARG:
@@ -348,7 +349,7 @@ Examples:
 - "check health of handlers.user in https://github.com/x/y" -> TOOL:module_health|PATH:https://github.com/x/y|ARG:handlers.user
 - "I want to add auth in https://github.com/x/y" -> TOOL:suggest_refactor|PATH:https://github.com/x/y|ARG:add auth
 - "check changes to handlers/user.py in /home/u/p" -> TOOL:check_change|PATH:/home/u/p|ARG:handlers/user.py
-- "graph for https://github.com/x/y" -> TOOL:get_metric_graph|PATH:https://github.com/x/y|ARG:
+- "graph for https://github.com/x/y" -> TOOL:generate_graph|PATH:https://github.com/x/y|ARG:
 
 ============================================================
 RESPONSE TYPE 3 -- HELP (rare; user asks to analyze but gives no path)
@@ -517,6 +518,64 @@ def _summarize(
 
 
 # ---------------------------------------------------------------------------
+# Graph generation helper
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).parent.parent
+
+
+def _parse_viz_stdout(stdout: str, output_path: str) -> dict:
+    """Parse visualization CLI stdout into the result dict for format_generate_graph."""
+    result: dict = {"output_path": output_path}
+
+    m = re.search(r"File-level:\s*(\d+)\s*nodes,\s*(\d+)\s*edges", stdout)
+    result["file_nodes"] = int(m.group(1)) if m else 0
+    result["file_edges"] = int(m.group(2)) if m else 0
+
+    m = re.search(r"Package-level:\s*(\d+)\s*nodes,\s*(\d+)\s*edges", stdout)
+    result["package_nodes"] = int(m.group(1)) if m else 0
+    result["package_edges"] = int(m.group(2)) if m else 0
+
+    m = re.search(r"Function-level:\s*(\d+)\s*nodes,\s*(\d+)\s*edges", stdout)
+    result["function_nodes"] = int(m.group(1)) if m else 0
+    result["function_edges"] = int(m.group(2)) if m else 0
+
+    m = re.search(r"Cycles \(file\):\s*(\d+)\s*nodes", stdout)
+    result["file_cycle_count"] = int(m.group(1)) if m else 0
+
+    m = re.search(r"High impact.*?:\s*(\d+)", stdout)
+    result["high_impact_count"] = int(m.group(1)) if m else 0
+
+    m = re.search(r"High susceptibility.*?:\s*(\d+)", stdout)
+    result["high_susceptibility_count"] = int(m.group(1)) if m else 0
+
+    return result
+
+
+def _generate_graph_for_path(repo_path: str) -> str:
+    """Run the visualization module to generate an interactive dependency graph."""
+    output_path = _REPO_ROOT / "visualization" / "output" / "graph.html"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        sys.executable, "-m", "visualization.generate_graph",
+        "--path", repo_path,
+        "--output", str(output_path),
+        "--no-browser",
+    ]
+    proc = subprocess.run(
+        cmd, cwd=str(_REPO_ROOT),
+        capture_output=True, text=True, timeout=120,
+    )
+
+    if proc.returncode != 0:
+        return f"Graph generation failed (exit {proc.returncode}): {proc.stderr.strip()}"
+
+    result = _parse_viz_stdout(proc.stdout, str(output_path.resolve()))
+    return format_generate_graph(result)
+
+
+# ---------------------------------------------------------------------------
 # Tool dispatcher
 # ---------------------------------------------------------------------------
 
@@ -556,12 +615,11 @@ def _run_tool(tool_name: str, path_or_url: str, arg: str) -> str:
             result = analyzer.incremental_check(path, files)
             return format_check_change(result)
 
-        elif tool_name == "get_metric_graph":
-            snapshot = analyzer.analyze(path)
-            return format_metric_graph(snapshot)
+        elif tool_name == "generate_graph":
+            return _generate_graph_for_path(path)
 
         else:
-            return f"Unknown tool: {tool_name}. Available: analyze_repo, module_health, suggest_refactor, check_change, get_metric_graph"
+            return f"Unknown tool: {tool_name}. Available: analyze_repo, module_health, suggest_refactor, check_change, generate_graph"
 
     except Exception as e:
         return f"Failed to process repository: {type(e).__name__}: {e}"
