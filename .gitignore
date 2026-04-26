@@ -19,3 +19,6 @@ explorer.html
 
 # Output
 output/
+
+# uagents ctx.storage state
+*_data.json
